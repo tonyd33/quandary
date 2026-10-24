@@ -274,8 +274,11 @@ optionAt space = (`Map.lookup` index)
 questionContaining :: Space -> OptionId -> Maybe Question
 questionContaining space o = questionOf space o >>= (`Map.lookup` space.questions)
 
+-- | Returns the question an option answers. Bind `questionOf space` once
+-- outside a loop; each application to a space indexes every option.
 questionOf :: Space -> OptionId -> Maybe Id
-questionOf _ (Other q) = Just q
-questionOf space (Listed i) = (\(q, _) -> q.id) <$> at i
+questionOf space = owner
   where
     at = optionAt space
+    owner (Other q) = Just q
+    owner (Listed i) = (\(q, _) -> q.id) <$> at i
