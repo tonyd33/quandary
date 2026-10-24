@@ -1,0 +1,10 @@
+indentation: 2
+comma-style: leading
+import-export-style: leading
+indent-wheres: true
+record-brace-space: true
+haddock-style: single-line
+haddock-style-module: single-line
+let-style: inline
+respectful: false
+single-constraint-parens: never

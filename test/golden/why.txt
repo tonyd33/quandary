@@ -1,0 +1,2 @@
+sync/crdt is impossible because of:
+  accept store/files (current: must open in any editor)

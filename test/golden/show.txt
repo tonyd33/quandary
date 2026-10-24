@@ -1,0 +1,11 @@
+sync/how: How devices sync [open]
+pick: one, a root
+
+Devices edit offline and reconcile when they reconnect.
+
+impossible  sync/crdt       CRDT per note
+defeated    sync/lww        Last write wins per file  silently loses edits made offline
+  raises conflict/shown
+possible    sync/git        Git repo under the hood
+  raises conflict/shown, sync/merge-conflicts
+possible    sync/how.other

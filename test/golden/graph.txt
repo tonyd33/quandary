@@ -1,0 +1,107 @@
+flowchart LR
+  q_conflict_47_compare["conflict/compare: What the merge screen compares"]
+  o_conflict_47_two_45_way("conflict/two-way: Mine against theirs")
+  q_conflict_47_compare --> o_conflict_47_two_45_way
+  o_conflict_47_three_45_way("conflict/three-way: Mine and theirs against their common ancestor")
+  q_conflict_47_compare --> o_conflict_47_three_45_way
+  o_conflict_47_three_45_way -. needs .-> o_sync_47_git
+  x_conflict_47_compare("conflict/compare.other")
+  q_conflict_47_compare --> x_conflict_47_compare
+  o_conflict_47_diff ==> q_conflict_47_compare
+  q_conflict_47_narrow["conflict/narrow: A phone screen is too narrow for two columns"]
+  o_conflict_47_phone_45_layout("conflict/phone-layout: A different layout on phones")
+  q_conflict_47_narrow --> o_conflict_47_phone_45_layout
+  x_conflict_47_narrow("conflict/narrow.other")
+  q_conflict_47_narrow --> x_conflict_47_narrow
+  o_conflict_47_diff ==> q_conflict_47_narrow
+  q_conflict_47_phone["conflict/phone: Merge screen on a phone"]
+  o_conflict_47_stacked("conflict/stacked: Versions stacked vertically, hunks interleaved")
+  q_conflict_47_phone --> o_conflict_47_stacked
+  o_conflict_47_swipe("conflict/swipe: One version at a time, swipe to switch")
+  q_conflict_47_phone --> o_conflict_47_swipe
+  o_conflict_47_desktop_45_only("conflict/desktop-only: Phone shows the banner only, resolve on a desktop")
+  q_conflict_47_phone --> o_conflict_47_desktop_45_only
+  o_conflict_47_desktop_45_only x-. excludes .-x o_conflict_47_modal
+  x_conflict_47_phone("conflict/phone.other")
+  q_conflict_47_phone --> x_conflict_47_phone
+  o_conflict_47_phone_45_layout ==> q_conflict_47_phone
+  q_conflict_47_shown["conflict/shown: What the user sees on a conflict"]
+  o_conflict_47_copy("conflict/copy: Keep both as #quot;note (conflict).md#quot;")
+  q_conflict_47_shown --> o_conflict_47_copy
+  o_conflict_47_copy x-. excludes .-x o_store_47_sqlite
+  o_conflict_47_diff("conflict/diff: Side-by-side merge screen")
+  q_conflict_47_shown --> o_conflict_47_diff
+  o_conflict_47_silent("conflict/silent: Drop the loser silently")
+  q_conflict_47_shown --> o_conflict_47_silent
+  x_conflict_47_shown("conflict/shown.other")
+  q_conflict_47_shown --> x_conflict_47_shown
+  o_sync_47_lww ==> q_conflict_47_shown
+  o_sync_47_git ==> q_conflict_47_shown
+  q_conflict_47_when["conflict/when: When the user resolves"]
+  o_conflict_47_modal("conflict/modal: Merge screen opens as soon as sync finds the conflict")
+  q_conflict_47_when --> o_conflict_47_modal
+  o_conflict_47_inbox("conflict/inbox: Both versions kept, banner on the note, resolve later")
+  q_conflict_47_when --> o_conflict_47_inbox
+  x_conflict_47_when("conflict/when.other")
+  q_conflict_47_when --> x_conflict_47_when
+  o_conflict_47_diff ==> q_conflict_47_when
+  q_store_47_editors["store/editors: Users cannot edit notes in other editors"]
+  o_store_47_mirror("store/mirror: Export a mirror folder on every save")
+  q_store_47_editors --> o_store_47_mirror
+  x_store_47_editors("store/editors.other")
+  q_store_47_editors --> x_store_47_editors
+  o_store_47_sqlite ==> q_store_47_editors
+  q_store_47_where["store/where: Where notes live on disk"]
+  o_store_47_files("store/files: Plain Markdown files in a folder")
+  q_store_47_where --> o_store_47_files
+  o_store_47_sqlite("store/sqlite: One SQLite database")
+  q_store_47_where --> o_store_47_sqlite
+  x_store_47_where("store/where.other")
+  q_store_47_where --> x_store_47_where
+  q_sync_47_how["sync/how: How devices sync"]
+  o_sync_47_crdt("sync/crdt: CRDT per note")
+  q_sync_47_how --> o_sync_47_crdt
+  o_sync_47_crdt -. needs .-> o_store_47_sqlite
+  o_sync_47_lww("sync/lww: Last write wins per file")
+  q_sync_47_how --> o_sync_47_lww
+  o_sync_47_git("sync/git: Git repo under the hood")
+  q_sync_47_how --> o_sync_47_git
+  o_sync_47_git -. needs .-> o_store_47_files
+  x_sync_47_how("sync/how.other")
+  q_sync_47_how --> x_sync_47_how
+  q_sync_47_merge_45_conflicts["sync/merge-conflicts: Merge conflicts surface to non-technical users"]
+  o_sync_47_driver("sync/driver: An automatic merge driver for Markdown")
+  q_sync_47_merge_45_conflicts --> o_sync_47_driver
+  x_sync_47_merge_45_conflicts("sync/merge-conflicts.other")
+  q_sync_47_merge_45_conflicts --> x_sync_47_merge_45_conflicts
+  o_sync_47_git ==> q_sync_47_merge_45_conflicts
+  classDef forced fill:#b7e4b7,stroke:#2e7d32
+  classDef possible fill:#fff3c4,stroke:#b8860b
+  classDef impossible fill:#e0e0e0,stroke:#9e9e9e,color:#757575
+  class o_conflict_47_copy possible
+  class o_conflict_47_desktop_45_only possible
+  class o_conflict_47_diff possible
+  class o_conflict_47_inbox possible
+  class o_conflict_47_modal possible
+  class o_conflict_47_phone_45_layout possible
+  class o_conflict_47_silent impossible
+  class o_conflict_47_stacked possible
+  class o_conflict_47_swipe possible
+  class o_conflict_47_three_45_way possible
+  class o_conflict_47_two_45_way possible
+  class o_store_47_files forced
+  class o_store_47_mirror impossible
+  class o_store_47_sqlite impossible
+  class o_sync_47_crdt impossible
+  class o_sync_47_driver possible
+  class o_sync_47_git possible
+  class o_sync_47_lww impossible
+  class x_conflict_47_compare possible
+  class x_conflict_47_narrow possible
+  class x_conflict_47_phone possible
+  class x_conflict_47_shown possible
+  class x_conflict_47_when possible
+  class x_store_47_editors impossible
+  class x_store_47_where impossible
+  class x_sync_47_how possible
+  class x_sync_47_merge_45_conflicts possible

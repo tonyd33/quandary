@@ -1,0 +1,74 @@
+module Quandary.Shell.Resolve
+  ( withOption
+  , withQuestion
+  , reopening
+  , optionsThenReason
+  , questionsThenReason
+  , withReason
+  )
+where
+
+import Control.Applicative ((<|>))
+import Data.Bifunctor (first)
+import Data.Char (isAsciiLower, isDigit)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Quandary.Core.Rulings
+import Quandary.Core.Types
+import Quandary.Shell.Exit
+import System.Exit (ExitCode)
+
+withOption :: Space -> Text -> (OptionId -> IO ExitCode) -> IO ExitCode
+withOption space t k = maybe (failWith (notAnOption space t)) k (resolveOption space t)
+
+withQuestion :: Space -> Text -> (Question -> IO ExitCode) -> IO ExitCode
+withQuestion space q k = maybe (failWith (notAQuestion space q)) k (Map.lookup (Id q) space.questions)
+
+reopening :: Space -> Text -> Maybe Edit
+reopening space t = Reopen <$> resolveOption space t <|> Undefer . (.id) <$> Map.lookup (Id t) space.questions
+
+optionsThenReason :: Space -> [Text] -> Either Text ([OptionId], Maybe Text)
+optionsThenReason space = idsThenReason "an option" (resolveOption space) (notAnOption space)
+
+questionsThenReason :: Space -> [Text] -> Either Text ([Question], Maybe Text)
+questionsThenReason space = idsThenReason "a question" (\t -> Map.lookup (Id t) space.questions) (notAQuestion space)
+
+withReason :: Text -> Either Text ([a], Maybe Text) -> ([a] -> Text -> IO ExitCode) -> IO ExitCode
+withReason verb parsed k = case parsed of
+  Left err -> failWith err
+  Right (_, Nothing) -> failWith (verb <> ": the reason is empty")
+  Right (xs, Just reason) -> k xs reason
+
+idsThenReason :: Text -> (Text -> Maybe a) -> (Text -> Text) -> [Text] -> Either Text ([a], Maybe Text)
+idsThenReason what resolve unknown args = case resolvedPrefix resolve args of
+  ([], t : _) -> Left (unknown t)
+  ([], []) -> Left ("expected " <> what)
+  (_, t : _) | idLike t -> Left (unknown t)
+  (ids, rest) -> Right (ids, reasonOf rest)
+
+resolvedPrefix :: (Text -> Maybe a) -> [Text] -> ([a], [Text])
+resolvedPrefix resolve (t : ts) | Just x <- resolve t = first (x :) (resolvedPrefix resolve ts)
+resolvedPrefix _ ts = ([], ts)
+
+idLike :: Text -> Bool
+idLike t = Text.any (== '/') t && Text.all idChar t
+
+idChar :: Char -> Bool
+idChar c = isAsciiLower c || isDigit c || c `elem` ("/-_." :: String)
+
+reasonOf :: [Text] -> Maybe Text
+reasonOf ws = case Text.strip (Text.unwords ws) of
+  "" -> Nothing
+  r -> Just r
+
+notAnOption :: Space -> Text -> Text
+notAnOption space t
+  | Map.member (Id t) space.questions = t <> " is a question, not an option"
+  | otherwise = "unknown option " <> t
+
+notAQuestion :: Space -> Text -> Text
+notAQuestion space t
+  | isJust (resolveOption space t) = t <> " is an option, not a question"
+  | otherwise = "unknown question " <> t

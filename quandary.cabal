@@ -1,0 +1,125 @@
+cabal-version: 3.0
+name:          quandary
+version:       0.1.0
+synopsis:      Explore a design space
+description:
+  Questions, options and the constraints between them, written as Markdown
+  files; rulings recorded in named points. Reports which options stay
+  possible, which are forced, the rulings responsible, and what to decide
+  next.
+license:       MIT
+license-file:  LICENSE
+author:        Tony Du
+category:      Development
+build-type:    Simple
+tested-with:   GHC == 9.10.3
+extra-doc-files: README.md
+extra-source-files:
+  test/fixtures/**/*.md
+  test/golden/*.txt
+
+common shared
+  default-language:   GHC2024
+  default-extensions:
+    DuplicateRecordFields
+    NoFieldSelectors
+    OverloadedRecordDot
+    LambdaCase
+    OverloadedStrings
+  ghc-options:      -Wall
+  build-depends:    base
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  autogen-modules: Paths_quandary
+  other-modules:   Paths_quandary
+  exposed-modules:
+    Quandary.Core.Analyse
+    Quandary.Core.Compile
+    Quandary.Core.Order
+    Quandary.Core.Rulings
+    Quandary.Core.Solver
+    Quandary.Core.Source
+    Quandary.Core.Types
+    Quandary.Core.Validate
+    Quandary.Shell.Cli
+    Quandary.Shell.Command.Accept
+    Quandary.Shell.Command.Adopt
+    Quandary.Shell.Command.Check
+    Quandary.Shell.Command.Defeat
+    Quandary.Shell.Command.Defer
+    Quandary.Shell.Command.Diff
+    Quandary.Shell.Command.Exhaust
+    Quandary.Shell.Command.Graph
+    Quandary.Shell.Command.Links
+    Quandary.Shell.Command.Point
+    Quandary.Shell.Command.Prefer
+    Quandary.Shell.Command.Reopen
+    Quandary.Shell.Command.Rulings
+    Quandary.Shell.Command.Settle
+    Quandary.Shell.Command.Show
+    Quandary.Shell.Command.Status
+    Quandary.Shell.Command.Whatif
+    Quandary.Shell.Command.Why
+    Quandary.Shell.Env
+    Quandary.Shell.Exit
+    Quandary.Shell.Options
+    Quandary.Shell.Render.Mermaid
+    Quandary.Shell.Render.Text
+    Quandary.Shell.Resolve
+    Quandary.Shell.Rule
+    Quandary.Shell.Solver.Cadical
+    Quandary.Shell.Solver.Toysolver
+    Quandary.Shell.Storage.Files
+    Quandary.Shell.Storage.Yaml
+  build-depends:
+    , bytestring
+    , cmark
+    , conduit
+    , containers
+    , directory
+    , filepath
+    , libyaml
+    , optparse-applicative
+    , text
+    , toysolver
+  pkgconfig-depends: cadical
+  extra-libraries:   stdc++
+
+executable quandary
+  import:         shared
+  hs-source-dirs: app
+  main-is:        Main.hs
+  build-depends:  quandary
+
+test-suite spec
+  import:         shared
+  type:           exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is:        Main.hs
+  build-tool-depends: quandary:quandary
+  other-modules:
+    BruteForce
+    Cli
+    Commands
+    Examples
+    Fixtures
+    Gen
+    Properties
+    Solvers
+    Storage
+  build-depends:
+    , bytestring
+    , containers
+    , directory
+    , filepath
+    , process
+    , quandary
+    , QuickCheck
+    , tasty
+    , tasty-golden
+    , tasty-hunit
+    , tasty-quickcheck
+    , temporary
+    , text

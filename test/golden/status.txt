@@ -1,0 +1,22 @@
+point current
+
+frontier
+  sync/how  git, other
+
+raised if taken
+  conflict/shown        by sync/git
+  conflict/compare      by conflict/diff
+  conflict/narrow       by conflict/diff
+  conflict/phone        by conflict/phone-layout
+  conflict/when         by conflict/diff
+  sync/merge-conflicts  by sync/git
+
+closed
+  store/where (files)
+
+dormant
+  store/editors
+
+points
+  current       fresh
+  edit-offline  fresh, extends current
