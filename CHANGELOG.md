@@ -10,6 +10,8 @@
 ### New Features
 
 - `graph --format dot` prints the space as a Graphviz digraph, each question a cluster holding its options. `graph` alone still prints Mermaid.
+- Added `browse`, which shows a point in the terminal: its questions grouped as in `status`, the selected question as in `show` with its description and option bodies, the questions each option raises, other points, and `whatif`. It redraws when the space's files change.
+- Added `serve [--port N]`, which serves the same pages as web pages on 127.0.0.1. A page reloads itself when the space's files change. The server refuses requests whose `Host` is not `127.0.0.1:N` or `localhost:N`, and drops raw HTML from bodies.
 
 ### Improvements
 

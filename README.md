@@ -315,15 +315,54 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 | `rulings` | point's rulings, inherited included, each with point it comes from |
 | `links` | each link label in use, with link count |
 | `diff POINT POINT` | each question whose state or options differ between two points |
+| `browse` | browse point in terminal; follows changes to space's files |
+| `serve [--port N]` | serve point as web pages on `127.0.0.1:N` (default 8080), printing `serving DIR at http://127.0.0.1:N/p/POINT`; follows changes to space's files |
 | `graph [--format mermaid\|dot]` | space as Mermaid flowchart (default) or Graphviz digraph, options coloured by verdict; in `dot`, each question a cluster holding its options |
 
-Ruling command names what it did, then prints what moved: one line per question touched, its state change and new verdicts of options it didn't rule, by key (`.other` only when forced, or when question neither changed state nor holds ruled option), and points extending this one that went stale or fresh. Also says when option already forced or impossible, with one responsible set of rulings and how many more `why` lists; still is after `reopen`, with every set; or ranked while impossible. Gives old and new reason when option ruled same way again (no reason clears it), and names raiser an accept commits to that no ruling takes. Refusal names every conflicting set of rulings, and `pick: one` question two of them answer. Every command but `check` refuses space with problems, except ruling's out-of-date title. `status`, `show`, `why`, `diff` exit 1 at stale point.
+Ruling command names what it did, then prints what moved: one line per question touched, its state change and new verdicts of options it didn't rule, by key (`.other` only when forced, or when question neither changed state nor holds ruled option), and points extending this one that went stale or fresh. Also says when option already forced or impossible, with one responsible set of rulings and how many more `why` lists; still is after `reopen`, with every set; or ranked while impossible. Gives old and new reason when option ruled same way again (no reason clears it), and names raiser an accept commits to that no ruling takes. Refusal names every conflicting set of rulings, and `pick: one` question two of them answer. Every command but `check`, `browse` and `serve` refuses space with problems, except ruling's out-of-date title; `browse` and `serve` show the problems until fixed. `status`, `show`, `why`, `diff` exit 1 at stale point.
 
 Question dormant when live in no design reaching point; closed when one option forced (`pick: one`) or none possible (`pick: any`); deferred when point defers it; open otherwise. Frontier = open questions.
 
 Order: question comes after questions of its raisers. Of questions that may come next, first = one touched by most constraints and raisings, then one in block just placed, then lower id. Questions joined by constraint form block.
 
 `adopt` writes branch's rulings, drops, deferrals into point it extends, branch winning; points extending branch extend that point instead. Any other point extending that point which adoption leaves stale drops fewest adopted rulings clearing every conflict; output names them. Ruling such point holds that it now inherits unchanged gets removed from it.
+
+### Browsing
+
+`browse` and `serve` read space live, never write it. A change to `quandary.yaml` or a Markdown file under `questions/`, `notes/` or `points/` redraws the page shown after 100ms without further changes; other files, `.jj` and `.git` included, are ignored. Pages:
+
+- status: what `status` prints.
+- question: what `show` prints, description and each option's body rendered from Markdown, code blocks verbatim; under each option, questions it raises with their states and options' verdicts, and theirs in turn.
+- points: every point as in `status`.
+- not found: unknown point, question or whatif id.
+- whatif: what `whatif` prints for the suppositions.
+
+`browse` lists point's questions on the left, grouped as in `status`, closed and deferred folded to a count unless one is shown; selected question on the right as in `show`, selected option's body, or question's description, below. Keys:
+
+| key | does |
+|---|---|
+| `j`/`k`, down/up | next/previous question, option or line in focused pane |
+| `tab` | focus next pane: questions, options, body |
+| `enter` | on question: focus options; on option of another question: open it; else fold or unfold option's raised questions |
+| `space` | fold or unfold selected option's raised questions |
+| `u` | open question of first option raising this one |
+| `z` | fold or unfold closed and deferred questions |
+| `p` | pick point (`j`/`k`, `enter`, `esc`) |
+| `w` | on option: whatif, then `a` accept, `d` defeat, `r` reopen, `esc` cancel |
+| `backspace` | back to previous page |
+| `q` | quit |
+
+`serve` URLs, ids as written:
+
+| URL | page |
+|---|---|
+| `/` | status at `--point` |
+| `/p/POINT` | status at `POINT` |
+| `/p/POINT/q/QUESTION` | question, e.g. `/p/current/q/sync/how` |
+| `/points` | points |
+| `/p/POINT/whatif?accept=O&defeat=O&reopen=ID` | whatif, suppositions in query order, ids as `whatif` takes them |
+
+Not found page answers 404. Each page reloads itself when space changes, through server-sent events on `/events?since=REVISION`. Server binds `127.0.0.1` only, answers 403 to `Host` other than `127.0.0.1:N` or `localhost:N`, and drops raw HTML from bodies.
 
 ## License
 

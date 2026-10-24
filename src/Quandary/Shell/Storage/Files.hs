@@ -6,6 +6,9 @@ module Quandary.Shell.Storage.Files
   , Shape (..)
   , Loaded (..)
   , readSpace
+  , directories
+  , usableModel
+  , problemsOf
   , writePoint
   , removePoint
   , pathOf
@@ -28,6 +31,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Quandary.Core.Source
 import Quandary.Core.Types
+import Quandary.Core.Validate (Model, Validation (..))
 import Quandary.Shell.Storage.Yaml
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeFile)
 import System.FilePath (dropExtension, makeRelative, normalise, splitDirectories, takeDirectory, takeExtension, (<.>), (</>))
@@ -63,15 +67,35 @@ data Loaded = Loaded
   }
   deriving (Eq, Show)
 
+-- | Returns the model, unless some file is unreadable or a problem blocks it.
+usableModel :: Loaded -> Validation -> Maybe Model
+usableModel loaded v
+  | null loaded.problems = v.model
+  | otherwise = Nothing
+
+-- | Returns the problems reading the space and validating it, located
+-- under the root given.
+problemsOf :: FilePath -> Loaded -> Validation -> [FileProblem]
+problemsOf root loaded v = loaded.problems ++ map (locate root) v.problems
+
+questionsDir, notesDir, pointsDir :: FilePath
+questionsDir = "questions"
+notesDir = "notes"
+pointsDir = "points"
+
+-- | The directories under the space's root holding its Markdown files.
+directories :: [FilePath]
+directories = [questionsDir, notesDir, pointsDir]
+
 -- | Read the space's `quandary.yaml` and every Markdown file under its
 -- `questions/`, `notes/` and `points/`. A missing file or directory holds
 -- nothing.
 readSpace :: FilePath -> IO Loaded
 readSpace root = do
   (cs, config) <- readConfig root
-  qs <- documents root "questions" QuestionDoc question
-  ns <- documents root "notes" NoteDoc note
-  ps <- documents root "points" PointDoc point
+  qs <- documents root questionsDir QuestionDoc question
+  ns <- documents root notesDir NoteDoc note
+  ps <- documents root pointsDir PointDoc point
   pure
     Loaded
       { problems = cs ++ concatMap fst qs ++ concatMap fst ns ++ concatMap fst ps
@@ -120,9 +144,9 @@ markdownUnder dir = do
 pathOf :: FilePath -> Document -> FilePath
 pathOf root =
   normalise . \case
-    QuestionDoc i -> root </> "questions" </> Text.unpack i <.> "md"
-    NoteDoc i -> root </> "notes" </> Text.unpack i <.> "md"
-    PointDoc n -> root </> "points" </> Text.unpack n <.> "md"
+    QuestionDoc i -> root </> questionsDir </> Text.unpack i <.> "md"
+    NoteDoc i -> root </> notesDir </> Text.unpack i <.> "md"
+    PointDoc n -> root </> pointsDir </> Text.unpack n <.> "md"
     ConfigDoc -> root </> "quandary.yaml"
 
 locate :: FilePath -> Problem -> FileProblem

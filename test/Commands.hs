@@ -12,6 +12,7 @@ import Quandary.Core.Order (decisionOrder)
 import Quandary.Core.Rulings
 import Quandary.Core.Types hiding (rank)
 import Quandary.Core.Validate (Model (..))
+import Quandary.Core.View (pointViews, questionViewFrom)
 import Quandary.Shell.Render.Dot qualified as Dot
 import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Render.Mermaid qualified as Mermaid
@@ -204,10 +205,10 @@ rendering =
   [ golden "status" $ \m -> do
       a <- analyse cadical m "current"
       staleNames <- everyStale cadical m
-      pure (Render.status m "current" a Map.empty (Just staleNames))
+      pure (Render.status m "current" a Map.empty (Just (pointViews m staleNames)))
   , golden "show" $ \m -> do
       a <- analyse cadical m "current"
-      pure (Render.showQuestion m "current" a Map.empty Map.empty (m.space.questions Map.! Id "sync/how"))
+      pure (Render.showQuestion m.space (questionViewFrom m "current" a Map.empty (m.space.questions Map.! Id "sync/how")))
   , golden "why" $ \m -> Render.why m "current" (listed "sync/crdt") Impossible <$> whyAll cadical m.space (rulingsOf m.points "current") (Take (listed "sync/crdt"))
   , golden "graph" $ \m -> Mermaid.graph <$> spaceGraph m
   , golden "graph-dot" $ \m -> Dot.graph <$> spaceGraph m

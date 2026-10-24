@@ -1,6 +1,6 @@
 module Properties (properties) where
 
-import BruteForce (bruteForceOn)
+import BruteForce (bruteForce, bruteForceOn)
 import Control.Monad (forM)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -11,6 +11,7 @@ import Quandary.Core.Analyse (Analysis (..), Bounds (..), Implication (..), Move
 import Quandary.Core.Compile (compile)
 import Quandary.Core.Solver
 import Quandary.Core.Types
+import Quandary.Core.View (QuestionView (..), questionView, statusBounds)
 import Quandary.Shell.Solver.Cadical (cadical)
 import Test.Tasty
 import Test.Tasty.QuickCheck
@@ -93,6 +94,16 @@ properties =
                           pure $
                             map (\i -> i.raising.question.id) found === [q.id | q <- Map.elems space.questions, any (elem o) q.raisedBy]
                               .&&. conjoin [i.values === raisedBounds space p' s i.raising.question | i <- found]
+    , testProperty "status bounds and question rows agree under brute force and CaDiCaL" $
+        forAll (genSpace >>= genGraded) $ \space ->
+          forAll (genPoint space) $ \p ->
+            let m = modelAt space p
+                facts solver = do
+                  a <- analyse solver m "current"
+                  bs <- statusBounds solver m "current" a
+                  vs <- mapM (questionView solver m "current" a) (Map.elems space.questions)
+                  pure (a, bs, map (.rows) vs)
+             in ioProperty ((===) <$> facts bruteForce <*> facts cadical)
     ]
   where
     consistent p = not (any (\o -> Set.member (Refuse o) p) [o | Take o <- Set.toList p])

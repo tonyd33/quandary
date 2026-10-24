@@ -14,7 +14,8 @@ import Quandary.Core.Source
 import Quandary.Core.Types
 import Quandary.Core.Validate
 import Quandary.Shell.Solver.Cadical (cadical)
-import Quandary.Shell.Storage.Files
+import Quandary.Shell.Storage.Files hiding (problemsOf)
+import Quandary.Shell.Storage.Files qualified as Files
 import Quandary.Shell.Storage.Yaml (YamlIssue (..))
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (makeRelative, takeDirectory, (</>))
@@ -323,4 +324,4 @@ load :: FilePath -> IO ([FileProblem], Maybe Model)
 load dir = do
   loaded <- readSpace dir
   let v = validate loaded.sources
-  pure (loaded.problems ++ map (locate dir) v.problems, v.model)
+  pure (Files.problemsOf dir loaded v, v.model)

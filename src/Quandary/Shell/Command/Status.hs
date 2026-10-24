@@ -1,11 +1,8 @@
 module Quandary.Shell.Command.Status (run) where
 
-import Data.Map.Strict qualified as Map
 import Data.Text.IO qualified as Text
-import Quandary.Core.Analyse (Standing (..))
 import Quandary.Core.Analyse qualified as Analyse
-import Quandary.Core.Types
-import Quandary.Core.Validate
+import Quandary.Core.View qualified as View
 import Quandary.Shell.Env
 import Quandary.Shell.Exit
 import Quandary.Shell.Render.Text qualified as Render
@@ -15,12 +12,7 @@ import System.Exit (ExitCode (..))
 run :: Env -> IO ExitCode
 run env = do
   a <- analysis env
-  bs <- case Analyse.standing a of
-    Nothing -> pure Map.empty
-    Just s -> Analyse.bounds Cadical.cadical env.model env.point s (openOptions env.model.space s)
+  bs <- View.statusBounds Cadical.cadical env.model env.point a
   staleNames <- Analyse.everyStale Cadical.cadical env.model
-  Text.putStr (Render.status env.model env.point a bs (Just staleNames))
+  Text.putStr (Render.status env.model env.point a bs (Just (View.pointViews env.model staleNames)))
   pure (exitCode a)
-
-openOptions :: Space -> Standing -> [OptionId]
-openOptions space s = [opt | q <- Map.elems space.questions, Analyse.isOpen (s.states Map.! q.id), opt <- choices q]

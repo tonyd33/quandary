@@ -22,6 +22,8 @@ data Options = Options
 
 data Command
   = Check
+  | Browse
+  | Serve Int
   | OnModel Action
 
 data Action
@@ -59,6 +61,8 @@ options =
     <*> strOption (long "point" <> metavar "NAME" <> value current <> help "The point to work at")
     <*> hsubparser
       ( subcommand "check" "Report every problem in the space and its points" (pure Check)
+          <> subcommand "browse" "Browse the space in the terminal, following changes to its files" (pure Browse)
+          <> subcommand "serve" "Serve the space as web pages on 127.0.0.1, following changes to its files" (Serve <$> port)
           <> modelCommand "status" "The frontier, then closed, deferred and dormant questions, then the points" (pure Status)
           <> modelCommand "show" "A question's options, verdicts, rulings and raised questions" (Show <$> positional "QUESTION")
           <> modelCommand "why" "Every set of rulings that makes an option impossible or forced" (Why <$> positional "OPTION")
@@ -77,6 +81,9 @@ options =
           <> modelCommand "diff" "How two points differ" (Diff <$> positional "POINT" <*> positional "POINT")
           <> modelCommand "graph" "The space as a Mermaid flowchart or a Graphviz digraph" (Graph <$> format)
       )
+
+port :: Parser Int
+port = option auto (long "port" <> metavar "N" <> value 8080 <> help "The port to serve on, 8080 by default")
 
 format :: Parser Format
 format =

@@ -23,6 +23,7 @@ module Quandary.Core.Rulings
   , resolveOption
   , writtenOption
   , titleOf
+  , assessmentOf
   )
 where
 
@@ -202,6 +203,10 @@ resolveOption space = \t -> case writtenOption t of
   _ -> Nothing
   where
     at = optionAt space
+
+assessmentOf :: Space -> OptionId -> Maybe Assessment
+assessmentOf _ (Other _) = Nothing
+assessmentOf space (Listed i) = optionAt space i >>= \(_, o) -> o.assessment
 
 -- | Returns the id before the first `.` and the text after it; Nothing for an invalid id.
 writtenOption :: Text -> Maybe (Id, Maybe Text)

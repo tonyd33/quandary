@@ -2,6 +2,11 @@ module Quandary.Shell.Resolve
   ( withOption
   , withQuestion
   , reopening
+  , Verb (..)
+  , verbName
+  , verbNamed
+  , supposing
+  , written
   , optionsThenReason
   , questionsThenReason
   , withReason
@@ -10,10 +15,12 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Bifunctor (first)
+import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Quandary.Core.Analyse (Supposition (..))
 import Quandary.Core.Rulings
 import Quandary.Core.Types
 import Quandary.Shell.Exit
@@ -27,6 +34,31 @@ withQuestion space q k = maybe (failWith (notAQuestion space q)) k (Map.lookup (
 
 reopening :: Space -> Text -> Maybe PointEdit
 reopening space t = Reopen <$> resolveOption space t <|> Undefer . (.id) <$> Map.lookup (Id t) space.questions
+
+-- | How `whatif` supposes of an id.
+data Verb = AcceptVerb | DefeatVerb | ReopenVerb
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+verbName :: Verb -> Text
+verbName AcceptVerb = "accept"
+verbName DefeatVerb = "defeat"
+verbName ReopenVerb = "reopen"
+
+verbNamed :: Text -> Maybe Verb
+verbNamed t = find ((== t) . verbName) [minBound ..]
+
+supposing :: Space -> Verb -> Text -> Maybe Supposition
+supposing space AcceptVerb t = Suppose . Take <$> resolveOption space t
+supposing space DefeatVerb t = Suppose . Refuse <$> resolveOption space t
+supposing space ReopenVerb t = Apply <$> reopening space t
+
+-- | Returns the verb and id that suppose it.
+written :: Supposition -> Maybe (Verb, Text)
+written (Suppose (Take o)) = Just (AcceptVerb, optionName o)
+written (Suppose (Refuse o)) = Just (DefeatVerb, optionName o)
+written (Apply (Reopen o)) = Just (ReopenVerb, optionName o)
+written (Apply (Undefer q)) = Just (ReopenVerb, idText q)
+written (Apply _) = Nothing
 
 optionsThenReason :: Space -> [Text] -> Either Text ([OptionId], Maybe Reason)
 optionsThenReason space = idsThenReason "an option" (resolveOption space) (notAnOption space)
