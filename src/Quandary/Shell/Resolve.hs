@@ -10,7 +10,6 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Bifunctor (first)
-import Data.Char (isAsciiLower, isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -26,22 +25,22 @@ withOption space t k = maybe (failWith (notAnOption space t)) k (resolveOption s
 withQuestion :: Space -> Text -> (Question -> IO ExitCode) -> IO ExitCode
 withQuestion space q k = maybe (failWith (notAQuestion space q)) k (Map.lookup (Id q) space.questions)
 
-reopening :: Space -> Text -> Maybe Edit
+reopening :: Space -> Text -> Maybe PointEdit
 reopening space t = Reopen <$> resolveOption space t <|> Undefer . (.id) <$> Map.lookup (Id t) space.questions
 
-optionsThenReason :: Space -> [Text] -> Either Text ([OptionId], Maybe Text)
+optionsThenReason :: Space -> [Text] -> Either Text ([OptionId], Maybe Reason)
 optionsThenReason space = idsThenReason "an option" (resolveOption space) (notAnOption space)
 
-questionsThenReason :: Space -> [Text] -> Either Text ([Question], Maybe Text)
+questionsThenReason :: Space -> [Text] -> Either Text ([Question], Maybe Reason)
 questionsThenReason space = idsThenReason "a question" (\t -> Map.lookup (Id t) space.questions) (notAQuestion space)
 
-withReason :: Text -> Either Text ([a], Maybe Text) -> ([a] -> Text -> IO ExitCode) -> IO ExitCode
+withReason :: Text -> Either Text ([a], Maybe Reason) -> ([a] -> Reason -> IO ExitCode) -> IO ExitCode
 withReason verb parsed k = case parsed of
   Left err -> failWith err
   Right (_, Nothing) -> failWith (verb <> ": the reason is empty")
   Right (xs, Just reason) -> k xs reason
 
-idsThenReason :: Text -> (Text -> Maybe a) -> (Text -> Text) -> [Text] -> Either Text ([a], Maybe Text)
+idsThenReason :: Text -> (Text -> Maybe a) -> (Text -> Text) -> [Text] -> Either Text ([a], Maybe Reason)
 idsThenReason what resolve unknown args = case resolvedPrefix resolve args of
   ([], t : _) -> Left (unknown t)
   ([], []) -> Left ("expected " <> what)
@@ -53,15 +52,10 @@ resolvedPrefix resolve (t : ts) | Just x <- resolve t = first (x :) (resolvedPre
 resolvedPrefix _ ts = ([], ts)
 
 idLike :: Text -> Bool
-idLike t = Text.any (== '/') t && Text.all idChar t
+idLike t = Text.any (== '/') t && isJust (writtenOption t)
 
-idChar :: Char -> Bool
-idChar c = isAsciiLower c || isDigit c || c `elem` ("/-_." :: String)
-
-reasonOf :: [Text] -> Maybe Text
-reasonOf ws = case Text.strip (Text.unwords ws) of
-  "" -> Nothing
-  r -> Just r
+reasonOf :: [Text] -> Maybe Reason
+reasonOf ws = parseReason (Text.strip (Text.unwords ws))
 
 notAnOption :: Space -> Text -> Text
 notAnOption space t

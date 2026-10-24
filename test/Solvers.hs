@@ -8,9 +8,9 @@ import Quandary.Core.Compile (compile)
 import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Shell.Solver.Cadical (cadical)
-import Quandary.Shell.Solver.Toysolver (toysolver)
 import Test.Tasty
 import Test.Tasty.QuickCheck
+import Toysolver (toysolver)
 
 solvers :: TestTree
 solvers =

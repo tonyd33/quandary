@@ -13,8 +13,17 @@ module Quandary.Core.Types
   , Note (..)
   , Point (..)
   , Ruling (..)
+  , Reason
+  , Rank
+  , rank
+  , parseRank
+  , rankValue
+  , maxRank
+  , parseReason
+  , reasonText
   , Formula (..)
   , Verdict (..)
+  , Raising (..)
   , choices
   , optionOf
   , opposite
@@ -23,16 +32,25 @@ module Quandary.Core.Types
   , questionContaining
   , optionName
   , idText
+  , validId
+  , validSegment
   , optionAt
   , questionOf
+  , raisedQuestions
   )
 where
 
-import Data.List.NonEmpty (NonEmpty)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.Containers.ListUtils (nubOrd)
+import Data.Foldable (toList)
+import Data.List.NonEmpty (NonEmpty, nonEmpty)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (mapMaybe)
 import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 
 newtype Id = Id Text
   deriving (Eq, Ord, Show)
@@ -128,7 +146,7 @@ data Point = Point
   , drop :: Set OptionId
   -- ^ Inherited rulings this point does without.
   , defer :: Set Id
-  , prefer :: Map OptionId Int
+  , prefer :: Map OptionId Rank
   , body :: Text
   }
   deriving (Eq, Show)
@@ -136,9 +154,41 @@ data Point = Point
 data Ruling = Ruling
   { title :: Maybe Text
   -- ^ The option's title when ruled on; Nothing for an implicit other.
-  , reason :: Maybe Text
+  , reason :: Maybe Reason
   }
   deriving (Eq, Show)
+
+-- | Text holding something besides whitespace.
+newtype Reason = Reason Text
+  deriving (Eq, Show)
+
+parseReason :: Text -> Maybe Reason
+parseReason t
+  | Text.null (Text.strip t) = Nothing
+  | otherwise = Just (Reason t)
+
+reasonText :: Reason -> Text
+reasonText (Reason t) = t
+
+-- | A whole number from 0 to `maxRank`.
+newtype Rank = Rank Int
+  deriving (Eq, Ord, Show)
+
+maxRank :: Int
+maxRank = 10
+
+rank :: Int -> Maybe Rank
+rank r
+  | r >= 0 && r <= maxRank = Just (Rank r)
+  | otherwise = Nothing
+
+parseRank :: Text -> Maybe Rank
+parseRank t = case reads (Text.unpack t) of
+  [(r, "")] | Text.all isDigit t -> rank r
+  _ -> Nothing
+
+rankValue :: Rank -> Int
+rankValue (Rank r) = r
 
 -- | A design decides every variable and holds no forbidden set. Every
 -- forbidden set uses only the variables.
@@ -157,6 +207,27 @@ data Verdict
   | -- | No design takes it.
     Impossible
   deriving (Eq, Show)
+
+-- | A question some options raise.
+data Raising = Raising
+  { question :: Question
+  , with :: [NonEmpty OptionId]
+  -- ^ Each set of further options that raises it alongside them; empty
+  -- when they raise it alone.
+  }
+  deriving (Eq, Show)
+
+-- | Returns the questions some of the options raise.
+raisedQuestions :: Space -> Set OptionId -> [Raising]
+raisedQuestions space os = mapMaybe (raising os) (Map.elems space.questions)
+
+raising :: Set OptionId -> Question -> Maybe Raising
+raising os q
+  | null others = Nothing
+  | any null others = Just (Raising q [])
+  | otherwise = Just (Raising q (mapMaybe nonEmpty (nubOrd others)))
+  where
+    others = [filter (`Set.notMember` os) (toList g) | g <- q.raisedBy, any (`Set.member` os) g]
 
 -- | Returns the options a design decides for the question, its implicit
 -- other first.
@@ -185,6 +256,13 @@ optionName (Other (Id q)) = q <> ".other"
 
 idText :: Id -> Text
 idText (Id t) = t
+
+-- | Holds for a path of segments of letters, digits, `-` and `_`.
+validId :: Text -> Bool
+validId = all validSegment . Text.splitOn "/"
+
+validSegment :: Text -> Bool
+validSegment t = not (Text.null t) && Text.all (\c -> isAsciiLower c || isAsciiUpper c || isDigit c || c == '-' || c == '_') t
 
 -- | Returns the listed option with the id, and its question.
 optionAt :: Space -> Id -> Maybe (Question, Option)

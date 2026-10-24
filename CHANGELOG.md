@@ -1,3 +1,19 @@
 # Changelog
 
 ## 0.1.0 (unreleased)
+
+### Breaking Changes
+
+- **Blank reasons are problems**: `check` reports a `reason` that is empty or only whitespace, and a space holding one no longer loads until it is fixed.
+- **`settle` refuses a stale point**: `settle` at a stale point is now refused, writing nothing. Previously it reported the question settled without defeating anything.
+
+### Improvements
+
+- `show` now prints each question an option raises once, with its title. Options that raise it together with that option go on a `with any of` line under it.
+- `whatif accept` now lists every question the accepted options raise, with the bounds of its possible options at the point the acceptance reaches.
+
+### Bug Fixes
+
+- Fixed ruling commands reading an id with capital letters, such as `Naming/N3`, as the start of the reason when it followed valid ids. It is now reported as an unknown id.
+- Fixed `status` listing an open question under both "taken, more possible" and "raised if taken" when one of its options was taken but none of its raisers was. It is now listed under "taken, more possible" only.
+- Fixed `whatif defeat` naming its own ruling with an empty reason, `(current: )`. It now prints `(current)`.

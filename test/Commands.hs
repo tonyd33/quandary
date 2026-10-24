@@ -1,14 +1,16 @@
 module Commands (commands) where
 
 import Data.ByteString.Lazy qualified as Lazy
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
-import Fixtures (cleanModelOf, fixture, listed, modelOf, other, withCopy)
+import Fixtures (because, cleanModelOf, fixture, listed, modelAt, modelOf, option, other, question, rank, spaceOf, withCopy)
 import Quandary.Core.Analyse
 import Quandary.Core.Order (decisionOrder)
 import Quandary.Core.Rulings
-import Quandary.Core.Types
+import Quandary.Core.Types hiding (rank)
 import Quandary.Core.Validate (Model (..))
 import Quandary.Shell.Render.Mermaid qualified as Mermaid
 import Quandary.Shell.Render.Text qualified as Render
@@ -38,9 +40,9 @@ points =
       m <- cleanModelOf dir
       let p =
             (pointNamed m.points "current")
-              { defeat = Map.insert (other "sync/how") (Ruling Nothing (Just "all there is: #1, no")) (pointNamed m.points "current").defeat
+              { defeat = Map.insert (other "sync/how") (Ruling Nothing (Just (because "all there is: #1, no"))) (pointNamed m.points "current").defeat
               , defer = Set.fromList [Id "sync/merge-conflicts"]
-              , prefer = Map.fromList [(listed "sync/git", 8), (listed "conflict/diff", 0)]
+              , prefer = Map.fromList [(listed "sync/git", rank 8), (listed "conflict/diff", rank 0)]
               , body = "Prose.\n"
               }
       writePoint dir p
@@ -57,10 +59,26 @@ states =
         Fresh s -> do
           Map.lookup (Id "store/where") s.states @?= Just Closed
           Map.lookup (Id "store/editors") s.states @?= Just Dormant
-          Map.lookup (Id "sync/how") s.states @?= Just Open
+          Map.lookup (Id "sync/how") s.states @?= Just (Open Raised)
+  , testCase "an unraised question names the raisers still possible" $ do
+      m <- model
+      a <- analyse cadical m "current"
+      fmap (Map.lookup (Id "conflict/shown") . (.states)) (standing a) @?= Just (Just (Open (Unraised ((listed "sync/git" :| []) :| []))))
+  , testCase "an open question with an option taken" $ do
+      let m = modelAt pickAny (Set.singleton (Take (listed "a")))
+      a <- analyse cadical m "current"
+      fmap (Map.lookup (Id "q") . (.states)) (standing a) @?= Just (Just (Open Taken))
+  , testCase "an option taken without a raiser taken counts as taken" $ do
+      a <- analyse cadical takenUnraised "current"
+      fmap (Map.lookup (Id "q") . (.states)) (standing a) @?= Just (Just (Open Taken))
+  , testCase "status lists a taken question under taken, not raised" $ do
+      a <- analyse cadical takenUnraised "current"
+      let shown = Text.lines (Render.status takenUnraised "current" a Map.empty Nothing)
+      assertBool "taken, more possible" ("taken, more possible" `elem` shown)
+      assertBool "raised if taken" ("raised if taken" `notElem` shown)
   , testCase "a question whose answer the rulings force is closed" $ do
       m <- model
-      let m' = m {points = Map.adjust (\p -> p {defeat = Map.insert (other "sync/how") (Ruling Nothing (Just "all there is")) p.defeat}) "current" m.points}
+      let m' = m {points = Map.adjust (\p -> p {defeat = Map.insert (other "sync/how") (Ruling Nothing (Just (because "all there is"))) p.defeat}) "current" m.points}
       a <- analyse cadical m' "current"
       fmap (Map.lookup (Id "sync/how") . (.states)) (standing a) @?= Just (Just Closed)
   , testCase "deferred" $ do
@@ -73,7 +91,7 @@ states =
       analyse cadical m "edit-offline" >>= \case
         StaleAt _ -> assertFailure "stale"
         Fresh s -> do
-          Map.lookup (Id "conflict/compare") s.states @?= Just Open
+          Map.lookup (Id "conflict/compare") s.states @?= Just (Open Raised)
           Map.lookup (listed "sync/git") s.verdicts @?= Just Forced
   ]
 
@@ -81,55 +99,91 @@ edits :: [TestTree]
 edits =
   [ testCase "accepting into a stale point is refused" $ do
       m <- model
-      r <- edit cadical m "current" [Accept (listed "sync/crdt") Nothing]
-      either Just (const Nothing) r
+      r <- edit cadical m "current" [Rule (Accept (listed "sync/crdt") Nothing)]
+      refusal r
         @?= Just (WouldBeStale [Set.fromList [Take (listed "store/files"), Take (listed "sync/crdt")]])
   , testCase "defeating into a stale point is refused" $ do
       m <- model
-      let m' = m {points = Map.adjust (\p -> p {defeat = Map.insert (listed "sync/git") (Ruling (Just "Git repo under the hood") (Just "no")) p.defeat}) "current" m.points}
-      r <- edit cadical m' "current" [Defeat (other "sync/how") "all there is"]
-      either Just (const Nothing) r
+      let m' = m {points = Map.adjust (\p -> p {defeat = Map.insert (listed "sync/git") (Ruling (Just "Git repo under the hood") (Just (because "no"))) p.defeat}) "current" m.points}
+      r <- edit cadical m' "current" [Rule (Defeat (other "sync/how") (because "all there is"))]
+      refusal r
         @?= Just (WouldBeStale [Set.fromList [Take (listed "store/files"), Refuse (listed "sync/git"), Refuse (listed "sync/lww"), Refuse (other "sync/how")]])
   , testCase "a point's own ruling replaces the inherited one" $ do
       m <- model
-      let m' = m {points = Map.insert "branch" ((pointNamed Map.empty "branch") {extends = Just "current"}) m.points}
-      edit cadical m' "branch" [Accept (listed "sync/lww") Nothing] >>= \case
-        Left r -> assertFailure (show r)
-        Right (m'', _) -> do
-          let rs = rulingsOf m''.points "branch"
-          (Set.member (Take (listed "sync/lww")) rs, Set.member (Refuse (listed "sync/lww")) rs) @?= (True, False)
+      let m' = m {points = Map.insert "branch" ((emptyPoint "branch") {extends = Just "current"}) m.points}
+      edit cadical m' "branch" [Rule (Accept (listed "sync/lww") Nothing)] >>= single >>= \ed -> do
+        let rs = rulingsOf ed.model.points "branch"
+        (Set.member (Take (listed "sync/lww")) rs, Set.member (Refuse (listed "sync/lww")) rs) @?= (True, False)
   , testCase "reopening an inherited ruling drops it" $ do
       m <- model
-      edit cadical m "edit-offline" [Reopen (listed "store/files")] >>= \case
-        Left r -> assertFailure (show r)
-        Right (m', _) -> do
-          (pointNamed m'.points "edit-offline").drop @?= Set.singleton (listed "store/files")
-          Set.member (Take (listed "store/files")) (rulingsOf m'.points "edit-offline") @?= False
+      edit cadical m "edit-offline" [Rule (Reopen (listed "store/files"))] >>= single >>= \ed -> do
+        (pointNamed ed.model.points "edit-offline").drop @?= Set.singleton (listed "store/files")
+        Set.member (Take (listed "store/files")) (rulingsOf ed.model.points "edit-offline") @?= False
   , testCase "a ruling reports the points extending it that it leaves stale" $ do
       m <- model
-      r <- edit cadical m "current" [Defeat (listed "store/files") "no"]
-      fmap ((.branches) . snd) r
-        @?= Right [("edit-offline", Just [Set.fromList [Take (listed "sync/git"), Refuse (listed "store/files")], Set.fromList [Take (listed "conflict/diff"), Refuse (listed "store/files"), Refuse (listed "sync/lww")]])]
+      r <- edit cadical m "current" [Rule (Defeat (listed "store/files") (because "no"))]
+      fmap (map (.moved.branches)) r
+        @?= Right [[("edit-offline", Just [Set.fromList [Take (listed "sync/git"), Refuse (listed "store/files")], Set.fromList [Take (listed "conflict/diff"), Refuse (listed "store/files"), Refuse (listed "sync/lww")]])]]
   , testCase "why gives every set of rulings" $ do
       m <- model
       let rs = Set.insert (Take (listed "sync/git")) (rulingsOf m.points "current")
       cores <- whyAll cadical m.space rs (Take (listed "sync/crdt"))
       cores
         @?= [Set.singleton (Take (listed "store/files")), Set.singleton (Take (listed "sync/git"))]
+  , testCase "a proposed branch is adopted only once confirmed" $ do
+      m <- model
+      let m' = m {points = Map.insert "idea" ((emptyPoint "idea") {extends = Just "current", proposed = True}) m.points}
+      unconfirmed <- adopt cadical m' "idea" Unconfirmed
+      either Just (const Nothing) unconfirmed @?= Just Proposed
+      confirmed <- adopt cadical m' "idea" Confirmed
+      fmap (.into) confirmed @?= Right "current"
   , testCase "reopening what has no ruling" $ do
       m <- model
-      r <- edit cadical m "current" [Reopen (listed "sync/git")]
-      either Just (const Nothing) r
+      r <- edit cadical m "current" [Rule (Reopen (listed "sync/git"))]
+      refusal r
         @?= Just (Refused (NotRuled (listed "sync/git")))
   , testCase "accepting records the title and reports what moved" $ do
       m <- model
-      edit cadical m "current" [Accept (listed "sync/git") (Just "history for free")] >>= \case
-        Left r -> assertFailure (show r)
-        Right (m', mv) -> do
-          Map.lookup (listed "sync/git") (pointNamed m'.points "current").accept @?= Just (Ruling (Just "Git repo under the hood") (Just "history for free"))
-          mv.options @?= [(listed "sync/git", Possible, Forced), (other "sync/how", Possible, Impossible)]
-          mv.questions @?= [(Id "sync/how", Open, Closed)]
+      edit cadical m "current" [Rule (Accept (listed "sync/git") (Just (because "history for free")))] >>= single >>= \ed -> do
+        Map.lookup (listed "sync/git") (pointNamed ed.model.points "current").accept @?= Just (Ruling (Just "Git repo under the hood") (Just (because "history for free")))
+        ed.moved.options @?= [(listed "sync/git", Possible, Forced), (other "sync/how", Possible, Impossible)]
+        ed.moved.questions
+          @?= [ (Id "conflict/shown", Open (Unraised ((listed "sync/git" :| []) :| [])), Open Raised)
+              , (Id "sync/how", Open Raised, Closed)
+              , (Id "sync/merge-conflicts", Open (Unraised ((listed "sync/git" :| []) :| [])), Open Raised)
+              ]
+  , testCase "settling defeats the options still possible" $ do
+      r <- edit cadical (modelAt pickAny Set.empty) "current" [Settle (pickAny.questions Map.! Id "q") (because "enough")]
+      fmap (map (.applied)) r @?= Right [[Defeat o (because "enough") | o <- [listed "a", listed "b", other "q"]]]
+  , testCase "a settle after an edit settles what that edit leaves possible" $ do
+      r <- edit cadical (modelAt pickAny Set.empty) "current" [Rule (Accept (listed "a") Nothing), Settle (pickAny.questions Map.! Id "q") (because "enough")]
+      fmap (map (.applied)) r @?= Right [[Accept (listed "a") Nothing], [Defeat o (because "enough") | o <- [listed "b", other "q"]]]
+  , testCase "settling a pick-one question with nothing taken is refused" $ do
+      m <- model
+      r <- edit cadical m "current" [Settle (m.space.questions Map.! Id "sync/how") (because "all of it")]
+      refusal r
+        @?= Just (WouldBeStale [Set.fromList [Take (listed "store/files"), Refuse (listed "sync/git"), Refuse (listed "sync/lww"), Refuse (other "sync/how")]])
   ]
+
+single :: Either (Model, Refusal) [Step] -> IO Step
+single = \case
+  Right [ed] -> pure ed
+  r -> assertFailure (show r)
+
+refusal :: Either (Model, Refusal) a -> Maybe Refusal
+refusal = either (Just . snd) (const Nothing)
+
+takenUnraised :: Model
+takenUnraised = modelAt space (Set.fromList [Refuse (other "r"), Refuse (other "q")])
+  where
+    space =
+      spaceOf
+        [ question "r" One [] [option "a", option "b"]
+        , question "q" Some [listed "a" :| [], listed "b" :| []] [option "x", (option "y") {needs = [listed "x"]}]
+        ]
+
+pickAny :: Space
+pickAny = spaceOf [question "q" Any [] [option "a", option "b"]]
 
 order :: [TestTree]
 order =
@@ -151,7 +205,7 @@ rendering =
       pure (Render.status m "current" a Map.empty (Just staleNames))
   , golden "show" $ \m -> do
       a <- analyse cadical m "current"
-      pure (Render.showQuestion m "current" a Map.empty (m.space.questions Map.! Id "sync/how"))
+      pure (Render.showQuestion m "current" a Map.empty Map.empty (m.space.questions Map.! Id "sync/how"))
   , golden "why" $ \m -> Render.why m "current" (listed "sync/crdt") Impossible <$> whyAll cadical m.space (rulingsOf m.points "current") (Take (listed "sync/crdt"))
   , golden "graph" $ \m -> do
       a <- analyse cadical m "current"

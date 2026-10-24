@@ -5,7 +5,8 @@ Devices edit offline and reconcile when they reconnect.
 
 impossible  sync/crdt       CRDT per note
 defeated    sync/lww        Last write wins per file  silently loses edits made offline
-  raises conflict/shown
+  raises conflict/shown: What the user sees on a conflict
 possible    sync/git        Git repo under the hood
-  raises conflict/shown, sync/merge-conflicts
+  raises conflict/shown: What the user sees on a conflict
+  raises sync/merge-conflicts: Merge conflicts surface to non-technical users
 possible    sync/how.other

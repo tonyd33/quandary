@@ -1,14 +1,13 @@
 {
   description = "quandary - explore a design space";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "github:cachix/devenv-nixpkgs/rolling";
 
   outputs =
     { nixpkgs, ... }:
     let
       inherit (nixpkgs) lib;
-      forAllSystems =
-        f: lib.genAttrs lib.systems.flakeExposed (system: f nixpkgs.legacyPackages.${system});
+      forAllSystems = f: lib.mapAttrs (_: f) nixpkgs.legacyPackages;
     in
     {
       packages = forAllSystems (pkgs: {

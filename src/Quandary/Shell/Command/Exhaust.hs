@@ -11,4 +11,4 @@ import System.Exit (ExitCode (..))
 
 run :: Env -> [Text] -> IO ExitCode
 run env args = Resolve.withReason "exhaust" (Resolve.questionsThenReason env.model.space args) $ \qs reason ->
-  Rule.rule env [Defeat (Other q.id) reason | q <- qs]
+  Rule.rule env [Rule (Defeat (Other q.id) reason) | q <- qs]

@@ -16,18 +16,14 @@ import Quandary.Shell.Solver.Cadical qualified as Cadical
 import Quandary.Shell.Storage.Files qualified as Files
 import System.Exit (ExitCode (..))
 
-run :: Env -> Text -> Bool -> IO ExitCode
-run env name confirmed
-  | Just branch <- Map.lookup name env.model.points
-  , branch.proposed
-  , not confirmed =
-      failWith (name <> " is proposed: confirm its rulings with the user, then adopt --confirmed")
-  | otherwise =
-      Analyse.adopt Cadical.cadical env.model name >>= \case
-        Left UnknownBranch -> failWith ("unknown point " <> name)
-        Left ExtendsNothing -> failWith (name <> " extends no point")
-        Left (StaleBranch cores) -> reportStale env name cores
-        Right a -> record env name a
+run :: Env -> Text -> Analyse.Confirmation -> IO ExitCode
+run env name confirmation =
+  Analyse.adopt Cadical.cadical env.model name confirmation >>= \case
+    Left UnknownBranch -> failWith ("unknown point " <> name)
+    Left Proposed -> failWith (name <> " is proposed: confirm its rulings with the user, then adopt --confirmed")
+    Left ExtendsNothing -> failWith (name <> " extends no point")
+    Left (StaleBranch cores) -> reportStale env name cores
+    Right a -> record env name a
 
 record :: Env -> Text -> Adoption -> IO ExitCode
 record env name a = do

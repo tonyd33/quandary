@@ -10,6 +10,7 @@ import Data.Text (Text)
 import Data.Version (showVersion)
 import Options.Applicative
 import Paths_quandary (version)
+import Quandary.Core.Analyse (Confirmation (..))
 import Quandary.Core.Rulings (current)
 
 data Options = Options
@@ -36,7 +37,7 @@ data Action
   | Prefer Text Text
   | PointNew Text (Maybe Text) Bool
   | PointRm Text
-  | Adopt Text Bool
+  | Adopt Text Confirmation
   | Rulings
   | Links
   | Diff Text Text
@@ -67,7 +68,7 @@ options =
           <> modelCommand "defer" "Leave a question off the frontier" (Defer <$> positional "QUESTION")
           <> modelCommand "prefer" "Rank an option 0 to 10, or - to clear" (Prefer <$> positional "OPTION" <*> positional "N")
           <> modelCommand "point" "Create or remove a point" (hsubparser (pointNew <> pointRm))
-          <> modelCommand "adopt" "Move a branch's rulings into the point it extends and remove it" (Adopt <$> positional "BRANCH" <*> switch (long "confirmed" <> help "The user confirmed a proposed branch's rulings"))
+          <> modelCommand "adopt" "Move a branch's rulings into the point it extends and remove it" (Adopt <$> positional "BRANCH" <*> flag Unconfirmed Confirmed (long "confirmed" <> help "The user confirmed a proposed branch's rulings"))
           <> modelCommand "rulings" "The point's rulings, inherited ones included" (pure Rulings)
           <> modelCommand "links" "Each link label in use, with how many links use it" (pure Links)
           <> modelCommand "diff" "How two points differ" (Diff <$> positional "POINT" <*> positional "POINT")

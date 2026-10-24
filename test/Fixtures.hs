@@ -8,13 +8,21 @@ module Fixtures
   , withCopy
   , modelOf
   , cleanModelOf
+  , because
+  , rank
+  , modelAt
   )
 where
 
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromJust)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
-import Quandary.Core.Types
+import Quandary.Core.Rulings (emptyPoint)
+import Quandary.Core.Types hiding (rank)
+import Quandary.Core.Types qualified as Types
 import Quandary.Core.Validate
 import Quandary.Shell.Storage.Files
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
@@ -56,6 +64,28 @@ option o =
     , links = []
     , assessment = Nothing
     }
+
+rank :: Int -> Rank
+rank = fromJust . Types.rank
+
+because :: Text -> Reason
+because = fromJust . parseReason
+
+-- | Returns a model whose `current` holds the rulings.
+modelAt :: Space -> Set Literal -> Model
+modelAt space p =
+  Model
+    { space
+    , points =
+        Map.singleton
+          "current"
+          (emptyPoint "current")
+            { accept = Map.fromList [(o, ruling) | Take o <- Set.toList p]
+            , defeat = Map.fromList [(o, ruling) | Refuse o <- Set.toList p]
+            }
+    }
+  where
+    ruling = Ruling {title = Nothing, reason = Just (because "r")}
 
 fixture :: FilePath
 fixture = "test/fixtures/notes-sync"
