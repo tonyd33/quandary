@@ -349,14 +349,14 @@ pointEvents p =
           ++ [("defeat", rulings p.defeat) | not (Map.null p.defeat)]
           ++ [("drop", sequence' [scalar (optionName o) | o <- Set.toList p.drop]) | not (Set.null p.drop)]
           ++ [("defer", sequence' [scalar q | Id q <- Set.toList p.defer]) | not (Set.null p.defer)]
-          ++ [ ("prefer", mapping Y.FlowMapping [(optionName o, scalar (Text.pack (show n))) | (o, n) <- Map.toList p.prefer])
+          ++ [ ("prefer", mapping Y.FlowMapping [(optionName o, scalar (Text.pack (show (rankValue n)))) | (o, n) <- Map.toList p.prefer])
              | not (Map.null p.prefer)
              ]
       )
     ++ [Y.EventDocumentEnd, Y.EventStreamEnd]
   where
     rulings rs = mapping Y.BlockMapping [(optionName o, ruling r) | (o, r) <- Map.toList rs]
-    ruling r = mapping Y.FlowMapping ([("title", scalar t) | Just t <- [r.title]] ++ [("reason", scalar t) | Just t <- [r.reason]])
+    ruling r = mapping Y.FlowMapping ([("title", scalar t) | Just t <- [r.title]] ++ [("reason", scalar (reasonText t)) | Just t <- [r.reason]])
     scalar t = [Y.EventScalar (encodeUtf8 t) Y.NoTag Y.Any Nothing]
     sequence' items = [Y.EventSequenceStart Y.NoTag Y.FlowSequence Nothing] ++ concat items ++ [Y.EventSequenceEnd]
     mapping style kvs =

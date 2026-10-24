@@ -12,4 +12,4 @@ import System.Exit (ExitCode (..))
 run :: Env -> [Text] -> IO ExitCode
 run env args = case Resolve.optionsThenReason env.model.space args of
   Left err -> failWith err
-  Right (os, reason) -> Rule.rule env [Accept opt reason | opt <- os]
+  Right (os, reason) -> Rule.rule env [Rule (Accept opt reason) | opt <- os]

@@ -13,6 +13,14 @@ module Quandary.Core.Types
   , Note (..)
   , Point (..)
   , Ruling (..)
+  , Reason
+  , Rank
+  , rank
+  , parseRank
+  , rankValue
+  , maxRank
+  , parseReason
+  , reasonText
   , Formula (..)
   , Verdict (..)
   , Raising (..)
@@ -24,12 +32,15 @@ module Quandary.Core.Types
   , questionContaining
   , optionName
   , idText
+  , validId
+  , validSegment
   , optionAt
   , questionOf
   , raisedQuestions
   )
 where
 
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Foldable (toList)
 import Data.List.NonEmpty (NonEmpty, nonEmpty)
@@ -39,6 +50,7 @@ import Data.Maybe (mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 
 newtype Id = Id Text
   deriving (Eq, Ord, Show)
@@ -134,7 +146,7 @@ data Point = Point
   , drop :: Set OptionId
   -- ^ Inherited rulings this point does without.
   , defer :: Set Id
-  , prefer :: Map OptionId Int
+  , prefer :: Map OptionId Rank
   , body :: Text
   }
   deriving (Eq, Show)
@@ -142,9 +154,41 @@ data Point = Point
 data Ruling = Ruling
   { title :: Maybe Text
   -- ^ The option's title when ruled on; Nothing for an implicit other.
-  , reason :: Maybe Text
+  , reason :: Maybe Reason
   }
   deriving (Eq, Show)
+
+-- | Text holding something besides whitespace.
+newtype Reason = Reason Text
+  deriving (Eq, Show)
+
+parseReason :: Text -> Maybe Reason
+parseReason t
+  | Text.null (Text.strip t) = Nothing
+  | otherwise = Just (Reason t)
+
+reasonText :: Reason -> Text
+reasonText (Reason t) = t
+
+-- | A whole number from 0 to `maxRank`.
+newtype Rank = Rank Int
+  deriving (Eq, Ord, Show)
+
+maxRank :: Int
+maxRank = 10
+
+rank :: Int -> Maybe Rank
+rank r
+  | r >= 0 && r <= maxRank = Just (Rank r)
+  | otherwise = Nothing
+
+parseRank :: Text -> Maybe Rank
+parseRank t = case reads (Text.unpack t) of
+  [(r, "")] | Text.all isDigit t -> rank r
+  _ -> Nothing
+
+rankValue :: Rank -> Int
+rankValue (Rank r) = r
 
 -- | A design decides every variable and holds no forbidden set. Every
 -- forbidden set uses only the variables.
@@ -212,6 +256,13 @@ optionName (Other (Id q)) = q <> ".other"
 
 idText :: Id -> Text
 idText (Id t) = t
+
+-- | Holds for a path of segments of letters, digits, `-` and `_`.
+validId :: Text -> Bool
+validId = all validSegment . Text.splitOn "/"
+
+validSegment :: Text -> Bool
+validSegment t = not (Text.null t) && Text.all (\c -> isAsciiLower c || isAsciiUpper c || isDigit c || c == '-' || c == '_') t
 
 -- | Returns the listed option with the id, and its question.
 optionAt :: Space -> Id -> Maybe (Question, Option)

@@ -10,4 +10,4 @@ import System.Exit (ExitCode (..))
 
 run :: Env -> [Text] -> IO ExitCode
 run env args = Resolve.withReason "defeat" (Resolve.optionsThenReason env.model.space args) $ \os reason ->
-  Rule.rule env [Defeat opt reason | opt <- os]
+  Rule.rule env [Rule (Defeat opt reason) | opt <- os]

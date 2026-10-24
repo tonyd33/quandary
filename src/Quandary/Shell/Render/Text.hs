@@ -5,12 +5,11 @@ module Quandary.Shell.Render.Text
   , why
   , because
   , ruled
-  , settled
   , movedLines
   , implicationLines
-  , Remark (..)
-  , remark
+  , stepLines
   , pointError
+  , badRank
   , refusal
   , editError
   , rulingLine
@@ -34,6 +33,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Quandary.Core.Analyse
+import Quandary.Core.Analyse qualified as Analyse
 import Quandary.Core.Order (decisionOrder)
 import Quandary.Core.Rulings
 import Quandary.Core.Source
@@ -91,7 +91,8 @@ issue _ (QuestionNotOption t) = t <> " is a question, not an option: name one of
 issue _ (TitleMismatch o recorded now) =
   "the ruling on " <> optionName o <> " recorded the title \"" <> recorded <> "\"; the option is now \"" <> now <> "\": rule again or restore the title"
 issue _ (TitleOnOther o) = "a ruling on " <> optionName o <> " records no title"
-issue _ (BadRank t) = "rank " <> t <> ": expected an integer from 0 to 10"
+issue _ (BadRank t) = badRank t
+issue _ EmptyReason = "empty reason"
 issue _ (BadProposed t) = "proposed is " <> t <> ": expected true"
 issue _ (BadUnverified t) = "unverified is " <> t <> ": expected true"
 issue _ (BadGrade t) = "bad grade " <> t <> ": grades are letters, digits, - and _"
@@ -123,10 +124,10 @@ status m name a bs staleNames =
       ++ case a of
         StaleAt cores -> "" : conflictLines m name "stale: no design holds these rulings:" "nor these:" cores
         Fresh s ->
-          table "frontier" [[idText q.id, frontierOptions s q] | q <- frontier s, raised s q, null (taken s q)]
-            ++ table "taken, more possible" [[idText q.id, frontierOptions s q] | q <- frontier s, not (null (taken s q))]
-            ++ table "raised if taken" [[idText q.id, "by " <> raisers s q] | q <- frontier s, not (raised s q)]
-            ++ listed "closed" [idText q.id <> " (" <> Text.intercalate ", " (map key (taken s q)) <> ")" | q <- inState s Closed]
+          table "frontier" [[idText q.id, frontierOptions s q] | (q, Raised) <- frontier s]
+            ++ table "taken, more possible" [[idText q.id, frontierOptions s q] | (q, Taken) <- frontier s]
+            ++ table "raised if taken" [[idText q.id, "by " <> Text.intercalate ", " (map raiserText (toList rs))] | (q, Unraised rs) <- frontier s]
+            ++ listed "closed" [idText q.id <> " (" <> Text.intercalate ", " (map key (taken s.verdicts q)) <> ")" | q <- inState s Closed]
             ++ listed "deferred" [idText q.id | q <- inState s Deferred]
             ++ listed "dormant" [idText q.id | q <- inState s Dormant]
       ++ maybe [] (\ss -> table "points" [[p, pointNote ss p] | p <- Map.keys m.points]) staleNames
@@ -138,16 +139,12 @@ status m name a bs staleNames =
     listed title items = ["", title] ++ wrapped items
     inState s st = [q | q <- Map.elems space.questions, Map.lookup q.id s.states == Just st]
     frontier s =
-      [ q
-      | block <- decisionOrder space (Map.keysSet (Map.filter (== Open) s.states))
+      [ (q, openness)
+      | block <- decisionOrder space (Map.keysSet (Map.filter isOpen s.states))
       , i <- block
       , Just q <- [Map.lookup i space.questions]
+      , Open openness <- [s.states Map.! q.id]
       ]
-    raised s q = null q.raisedBy || any (all (\o -> Map.lookup o s.verdicts == Just Forced)) q.raisedBy
-    raisers s q =
-      Text.intercalate
-        ", "
-        [raiserText g | g <- q.raisedBy, all (\o -> Map.lookup o s.verdicts /= Just Impossible) g]
     frontierOptions s q = Text.unwords (optionChunks m name bs s q)
     pointNote ss p =
       Text.intercalate ", " $
@@ -163,7 +160,7 @@ status m name a bs staleNames =
 -- | Returns the question's possible options by preference with their ranks
 -- and bounds, then its taken ones, punctuated to be joined by spaces.
 optionChunks :: Model -> Text -> Map OptionId Bounds -> Standing -> Question -> [Text]
-optionChunks m name bs s q = case (map (optionEntry m.space ranks bs) (shownPossible m name s q), map key (taken s q)) of
+optionChunks m name bs s q = case (map (optionEntry m.space ranks bs) (shownPossible m name s q), map key (taken s.verdicts q)) of
   (os, []) -> commas os
   ([], ts) -> takenChunks ts
   (os, ts) -> closedWith ";" (commas os) ++ takenChunks ts
@@ -172,7 +169,7 @@ optionChunks m name bs s q = case (map (optionEntry m.space ranks bs) (shownPoss
 
 -- | Returns the option's key, rank and bounds, the bounds only when they
 -- leave out some grade.
-optionEntry :: Space -> Map OptionId Int -> Map OptionId Bounds -> OptionId -> Text
+optionEntry :: Space -> Map OptionId Rank -> Map OptionId Bounds -> OptionId -> Text
 optionEntry space ranks bs o = Text.unwords (filter (not . Text.null) [key o, rankText ranks o, value])
   where
     value = case Map.lookup o bs of
@@ -186,11 +183,7 @@ shownPossible m name s q = case filter (/= Other q.id) possible of
   several@(_ : _ : _) -> several
   _ -> possible
   where
-    possible = [o | o <- byPreference m name q, Map.lookup o s.verdicts == Just Possible]
-
--- | Returns the question's options every design reaching the point takes.
-taken :: Standing -> Question -> [OptionId]
-taken s q = [o | o <- choices q, Map.lookup o s.verdicts == Just Forced]
+    possible = [o | o <- byPreference (preferenceAt m.points name) q, Map.lookup o s.verdicts == Just Possible]
 
 takenChunks :: [Text] -> [Text]
 takenChunks ts = case commas ts of
@@ -225,8 +218,8 @@ raiserText :: NonEmpty OptionId -> Text
 raiserText g = Text.intercalate " with " (map optionName (toList g))
 
 -- | Returns the option's rank in brackets, or nothing when unranked.
-rankText :: Map OptionId Int -> OptionId -> Text
-rankText ranks o = maybe "" (\n -> "[" <> tshow n <> "]") (Map.lookup o ranks)
+rankText :: Map OptionId Rank -> OptionId -> Text
+rankText ranks o = maybe "" (\n -> "[" <> tshow (rankValue n) <> "]") (Map.lookup o ranks)
 
 -- | Returns the items comma-separated, in indented lines of at most 80
 -- columns.
@@ -289,13 +282,6 @@ key :: OptionId -> Text
 key (Listed (Id t)) = snd (Text.breakOnEnd "/" t)
 key (Other _) = "other"
 
--- | Returns the question's options by preference: ranked first, highest
--- rank first, then as listed, the implicit other last.
-byPreference :: Model -> Text -> Question -> [OptionId]
-byPreference m name q = sortOn (\o -> Down (Map.lookup o ranks)) (listedThenOther q)
-  where
-    ranks = preferenceAt m.points name
-
 -- | Returns the options' lines in columns: standing, id, then title, rank
 -- and reason.
 optionLines :: Model -> Text -> Maybe Standing -> Map OptionId Bounds -> [OptionId] -> [Text]
@@ -307,7 +293,7 @@ optionLines m name s bs os = zipWith (\o line -> Text.justifyLeft 12 ' ' (markTe
     row o = [optionName o, Text.intercalate "  " (filter (not . Text.null) [title, value, rankText ranks o, note])]
       where
         note = maybe "" (\(_, p, r) -> from p r) (Map.lookup o rulingsHere)
-        from p r = Text.intercalate ": " (filter (not . Text.null) [if p == name then "" else "in " <> p, fromMaybe "" r.reason])
+        from p r = Text.intercalate ": " (filter (not . Text.null) [if p == name then "" else "in " <> p, maybe "" reasonText r.reason])
         title = fromMaybe "" (titleOf m.space o)
         value = maybe "" (("value " <>) . boundsText m.space) (Map.lookup o bs)
 
@@ -332,13 +318,15 @@ verdictText Possible = "possible"
 verdictText Impossible = "impossible"
 
 stateText :: QuestionState -> Text
-stateText Open = "open"
+stateText (Open _) = "open"
 stateText Closed = "closed"
 stateText Deferred = "deferred"
 stateText Dormant = "dormant"
 
-showQuestion :: Model -> Text -> Analysis -> Map OptionId Bounds -> Question -> Text
-showQuestion m name a bs q =
+-- | Returns the question in full, given its options' bounds and each
+-- dominated option's dominator.
+showQuestion :: Model -> Text -> Analysis -> Map OptionId Bounds -> Map OptionId OptionId -> Question -> Text
+showQuestion m name a bs dominators q =
   Text.unlines $
     [idText q.id <> ": " <> q.title <> state, shape, "", q.description, ""]
       ++ concat [line : graded o ++ dominated o ++ raises o | (o, line) <- zip os (optionLines m name (standing a) bs os)]
@@ -350,7 +338,7 @@ showQuestion m name a bs q =
       "pick: " <> (case q.pick of One -> "one"; Some -> "some"; Any -> "any") <> case q.raisedBy of
         [] -> ", a root"
         rs -> ", raised by " <> Text.intercalate ", " (map raiserText rs)
-    os = byPreference m name q
+    os = byPreference (preferenceAt m.points name) q
     graded o =
       [ "  graded " <> a'.grade <> (if a'.unverified then ", unverified" else "") <> maybe "" (": " <>) a'.why
       | Listed i <- [o]
@@ -358,11 +346,12 @@ showQuestion m name a bs q =
       , Just a' <- [opt.assessment]
       ]
     listed = optionAt m.space
-    dominated o = case (Map.lookup o bs, sortOn (Down . (.lo) . snd) [(p, b) | p <- os, p /= o, Just b <- [Map.lookup p bs]]) of
-      (Just b, (p, best) : _)
-        | b.hi < best.lo ->
-            ["  dominated: at best " <> gradeName m.space b.hi <> ", below " <> optionName p <> " at worst " <> gradeName m.space best.lo]
-      _ -> []
+    dominated o =
+      [ "  dominated: at best " <> gradeName m.space b.hi <> ", below " <> optionName p <> " at worst " <> gradeName m.space best.lo
+      | Just p <- [Map.lookup o dominators]
+      , let b = bs Map.! o
+            best = bs Map.! p
+      ]
     raises o = concat [("  raises " <> raisedTitle r) : coRaiserLines r | r <- raisedQuestions m.space (Set.singleton o)]
 
 why :: Model -> Text -> OptionId -> Verdict -> [Set Literal] -> Text
@@ -389,7 +378,7 @@ rulingLine m name l = verb <> " " <> optionName (optionOf l) <> source
       Take _ -> "accept"
       Refuse _ -> "defeat"
     source = case rulingFrom m.points name l of
-      Just (p, r) -> " (" <> p <> maybe "" (": " <>) r.reason <> ")"
+      Just (p, r) -> " (" <> p <> maybe "" ((": " <>) . reasonText) r.reason <> ")"
       Nothing -> ""
 
 -- | Returns the moves, one line per question touched, rendered against
@@ -404,7 +393,7 @@ movedLines m name mv =
     ++ ["nothing moved" | null mv.options, onlyOptionsMoved mv]
   where
     byQuestion = Map.fromListWith (flip (++)) [(q, [(o, a)]) | (o, _, a) <- mv.options, Just q <- [questionOf m.space o]]
-    states = Map.fromList [(q, (b, a)) | (q, b, a) <- mv.questions]
+    states = Map.fromList [(q, (b, a)) | (q, b, a) <- changedQuestions mv]
     touched = Set.toList (Map.keysSet byQuestion <> Map.keysSet states)
     question q = idText q <> change <> detail
       where
@@ -422,22 +411,28 @@ movedLines m name mv =
       conflictLines m p ("point " <> p <> " is now stale, because of:") "and because of:" cores
         ++ ["reopen there drops what it inherits" | any (inheritedAt m.points p) (concatMap Set.toList cores)]
 
--- | Returns the line naming an edit as done.
-ruled :: Edit -> Text
-ruled (Accept o _) = "accepted " <> optionName o
-ruled (Defeat (Other q) _) = "exhausted " <> idText q
-ruled (Defeat o _) = "defeated " <> optionName o
-ruled (Reopen o) = "reopened " <> optionName o
-ruled (Undefer q) = "reopened " <> idText q
-ruled (Defer q) = "deferred " <> idText q
-ruled (Prefer o (Just n)) = "ranked " <> optionName o <> " " <> tshow n
-ruled (Prefer o Nothing) = "unranked " <> optionName o
+-- | Holds when no question changed state and no branch or staleness
+-- moved.
+onlyOptionsMoved :: Moved -> Bool
+onlyOptionsMoved mv = null (changedQuestions mv) && null mv.branches && stale mv.after == stale mv.before
 
--- | Returns the line naming a question as settled, with the options it
--- defeated.
-settled :: Id -> [OptionId] -> Text
-settled q [] = "settled " <> idText q
-settled q os = "settled " <> idText q <> " (" <> Text.intercalate ", " (map key os) <> " defeated)"
+-- | Returns the line naming an edit as done, given the edits it was
+-- applied as.
+ruled :: Edit -> [PointEdit] -> Text
+ruled (Rule e) _ = done e
+ruled (Settle question _) applied = case [o | Defeat o _ <- applied] of
+  [] -> "settled " <> idText question.id
+  os -> "settled " <> idText question.id <> " (" <> Text.intercalate ", " (map key os) <> " defeated)"
+
+done :: PointEdit -> Text
+done (Accept o _) = "accepted " <> optionName o
+done (Defeat (Other q) _) = "exhausted " <> idText q
+done (Defeat o _) = "defeated " <> optionName o
+done (Reopen o) = "reopened " <> optionName o
+done (Undefer q) = "reopened " <> idText q
+done (Defer q) = "deferred " <> idText q
+done (Prefer o (Just n)) = "ranked " <> optionName o <> " " <> tshow (rankValue n)
+done (Prefer o Nothing) = "unranked " <> optionName o
 
 refusal :: Model -> Text -> Refusal -> Text
 refusal _ _ (Refused e) = editError e
@@ -467,6 +462,7 @@ conflictLines m name first next cores =
 editError :: EditError -> Text
 editError (NotRuled o) = optionName o <> " has no ruling to reopen\n"
 editError (NotDeferred q) = idText q <> " is not deferred\n"
+editError (SettlesStale q) = idText q <> " cannot be settled: the point is stale\n"
 
 -- | Returns the point's rulings, its own and inherited, each with the
 -- point it comes from.
@@ -477,7 +473,7 @@ rulings m name =
       ++ [rulingLine m name l | (l, _, _) <- sortOn order (Map.elems (effective m.points name))]
       ++ ["drop " <> optionName o <> " (" <> p.name <> ")" | p <- chain, o <- Set.toList p.drop]
       ++ ["defer " <> idText q <> " (" <> p.name <> ")" | p <- chain, q <- Set.toList p.defer]
-      ++ ["prefer " <> optionName o <> " " <> tshow n <> " (" <> from o <> ")" | (o, n) <- Map.toList (preferenceAt m.points name)]
+      ++ ["prefer " <> optionName o <> " " <> tshow (rankValue n) <> " (" <> from o <> ")" | (o, n) <- Map.toList (preferenceAt m.points name)]
   where
     chain = lineage m.points name
     order (l, _, _) = (case l of Take _ -> 0 :: Int; Refuse _ -> 1, optionOf l)
@@ -522,14 +518,17 @@ diff m (a, sa) (b, sb) =
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
 
-data Remark
-  = AlreadyDecided OptionId Verdict [Set Literal]
-  | StillDecided OptionId Verdict [Set Literal]
-  | ReasonChanged (Maybe Text) (Maybe Text)
-  | AlsoRuledIn Text
-  | CommitsToRaiser OptionId
-  | ImpossibleHere OptionId
-  deriving (Eq, Show)
+-- | Returns the lines naming a step, what it moved that it does not
+-- account for, and its remarks.
+stepLines :: Text -> Step -> [Text]
+stepLines name step = ruled step.edit step.applied : map ("  " <>) (unstated ++ remarks)
+  where
+    mv = step.moved
+    others = [x | x@(o, _, _) <- mv.options, Set.notMember o step.stated]
+    unstated
+      | not (null mv.options) && null others && onlyOptionsMoved mv = []
+      | otherwise = movedLines step.model name mv {Analyse.options = others}
+    remarks = concatMap (remark step.before step.model name) step.remarks
 
 -- | Returns a remark's lines, rendered against the model before the edit or
 -- after it, whichever the remark is about.
@@ -540,13 +539,16 @@ remark before _ name (AlreadyDecided o v cores) =
   where
     (shown, rest) = splitAt 1 cores
 remark _ after name (StillDecided o v cores) = because after name (optionName o <> " is still " <> verdictText v) v o cores
-remark _ _ _ (ReasonChanged old new) = ["reason: " <> reasonText old <> " -> " <> reasonText new]
+remark _ _ _ (ReasonChanged old new) = ["reason: " <> reasonOrNone old <> " -> " <> reasonOrNone new]
 remark _ _ _ (AlsoRuledIn p) = ["also ruled so in " <> p]
 remark _ _ _ (CommitsToRaiser r) = ["commits to raiser " <> optionName r <> ", which nothing else rules"]
 remark _ _ _ (ImpossibleHere o) = [optionName o <> " is impossible at this point"]
 
-reasonText :: Maybe Text -> Text
-reasonText = fromMaybe "none"
+reasonOrNone :: Maybe Reason -> Text
+reasonOrNone = maybe "none" reasonText
+
+badRank :: Text -> Text
+badRank t = "rank " <> t <> ": expected an integer from 0 to " <> tshow maxRank
 
 pointError :: PointError -> Text
 pointError (PointExists p) = "point " <> p <> " exists"

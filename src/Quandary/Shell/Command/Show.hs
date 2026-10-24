@@ -1,5 +1,6 @@
 module Quandary.Shell.Command.Show (run) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text.IO qualified as Text
 import Quandary.Core.Analyse qualified as Analyse
@@ -15,6 +16,8 @@ import System.Exit (ExitCode (..))
 run :: Env -> Text -> IO ExitCode
 run env q = Resolve.withQuestion env.model.space q $ \question -> do
   a <- analysis env
-  bs <- Analyse.bounds Cadical.cadical env.model env.point a (choices question)
-  Text.putStr (Render.showQuestion env.model env.point a bs question)
+  bs <- case Analyse.standing a of
+    Nothing -> pure Map.empty
+    Just s -> Analyse.bounds Cadical.cadical env.model env.point s (choices question)
+  Text.putStr (Render.showQuestion env.model env.point a bs (Analyse.dominance env.model env.point bs) question)
   pure (exitCode a)

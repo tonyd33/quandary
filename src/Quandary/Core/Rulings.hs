@@ -1,5 +1,6 @@
 module Quandary.Core.Rulings
   ( Edit (..)
+  , PointEdit (..)
   , EditError (..)
   , PointError (..)
   , current
@@ -8,25 +9,27 @@ module Quandary.Core.Rulings
   , newPoint
   , withoutPoint
   , ruledLiteral
-  , parseRank
   , lineage
   , descendants
   , effective
   , rulingsOf
   , deferredAt
   , preferenceAt
+  , byPreference
   , rulingFrom
   , inheritedAt
   , applyEdit
+  , withRuling
   , resolveOption
+  , writtenOption
   , titleOf
   )
 where
 
-import Data.Char (isDigit)
-import Data.List (find)
+import Data.List (find, sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Ord (Down (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -34,17 +37,25 @@ import Data.Text qualified as Text
 import Quandary.Core.Types
 
 data Edit
-  = Accept OptionId (Maybe Text)
-  | Defeat OptionId Text
+  = Rule PointEdit
+  | -- | Defeat every option of the question still possible.
+    Settle Question Reason
+  deriving (Eq, Show)
+
+data PointEdit
+  = Accept OptionId (Maybe Reason)
+  | Defeat OptionId Reason
   | Reopen OptionId
   | Undefer Id
   | Defer Id
-  | Prefer OptionId (Maybe Int)
+  | Prefer OptionId (Maybe Rank)
   deriving (Eq, Show)
 
 data EditError
   = NotRuled OptionId
   | NotDeferred Id
+  | -- | A settle at a stale point.
+    SettlesStale Id
   deriving (Eq, Show)
 
 data PointError
@@ -95,16 +106,10 @@ withoutPoint points name
 extendsPoint :: Text -> Point -> Bool
 extendsPoint name p = p.extends == Just name
 
-ruledLiteral :: Edit -> Maybe Literal
+ruledLiteral :: PointEdit -> Maybe Literal
 ruledLiteral (Accept o _) = Just (Take o)
 ruledLiteral (Defeat o _) = Just (Refuse o)
 ruledLiteral _ = Nothing
-
--- | Returns a rank written as a whole number from 0 to 10.
-parseRank :: Text -> Maybe Int
-parseRank t = case reads (Text.unpack t) of
-  [(r, "")] | Text.all isDigit t, r <= 10 -> Just r
-  _ -> Nothing
 
 -- | Returns the named point and the points it extends, nearest first.
 --
@@ -142,8 +147,13 @@ deferredAt :: Map Text Point -> Text -> Set Id
 deferredAt points name = Set.unions [p.defer | p <- lineage points name]
 
 -- | Returns each ranked option's rank, the nearest point's winning.
-preferenceAt :: Map Text Point -> Text -> Map OptionId Int
+preferenceAt :: Map Text Point -> Text -> Map OptionId Rank
 preferenceAt points name = Map.unions [p.prefer | p <- lineage points name]
+
+-- | Returns the question's options by preference given the ranks: ranked
+-- first, highest rank first, then as listed, the implicit other last.
+byPreference :: Map OptionId Rank -> Question -> [OptionId]
+byPreference ranks q = sortOn (\o -> Down (Map.lookup o ranks)) (listedThenOther q)
 
 -- | Returns the point the literal's ruling comes from, and the ruling.
 rulingFrom :: Map Text Point -> Text -> Literal -> Maybe (Text, Ruling)
@@ -157,14 +167,12 @@ inheritedAt :: Map Text Point -> Text -> Literal -> Bool
 inheritedAt points name l = maybe False ((/= name) . fst) (rulingFrom points name l)
 
 -- | Apply an edit to the named point itself.
-applyEdit :: Space -> Map Text Point -> Text -> Edit -> Either EditError Point
+applyEdit :: Space -> Map Text Point -> Text -> PointEdit -> Either EditError Point
 applyEdit space points name = editedPoint space (effective points name) (pointNamed points name)
 
-editedPoint :: Space -> Map OptionId (Literal, Text, Ruling) -> Point -> Edit -> Either EditError Point
-editedPoint space _ p (Accept o reason) =
-  pure p {accept = Map.insert o (ruling space o reason) p.accept, defeat = Map.delete o p.defeat, drop = Set.delete o p.drop}
-editedPoint space _ p (Defeat o reason) =
-  pure p {defeat = Map.insert o (ruling space o (Just reason)) p.defeat, accept = Map.delete o p.accept, drop = Set.delete o p.drop}
+editedPoint :: Space -> Map OptionId (Literal, Text, Ruling) -> Point -> PointEdit -> Either EditError Point
+editedPoint space _ p (Accept o reason) = pure (withRuling space (Take o) reason p)
+editedPoint space _ p (Defeat o reason) = pure (withRuling space (Refuse o) (Just reason) p)
 editedPoint _ inherited p (Reopen o)
   | Map.member o p.accept || Map.member o p.defeat =
       pure p {accept = Map.delete o p.accept, defeat = Map.delete o p.defeat}
@@ -174,19 +182,34 @@ editedPoint _ _ p (Undefer q)
   | Set.member q p.defer = pure p {defer = Set.delete q p.defer}
   | otherwise = Left (NotDeferred q)
 editedPoint _ _ p (Defer q) = pure p {defer = Set.insert q p.defer}
-editedPoint _ _ p (Prefer o rank) = pure p {prefer = Map.alter (const rank) o p.prefer}
+editedPoint _ _ p (Prefer o r) = pure p {prefer = Map.alter (const r) o p.prefer}
 
-ruling :: Space -> OptionId -> Maybe Text -> Ruling
+withRuling :: Space -> Literal -> Maybe Reason -> Point -> Point
+withRuling space (Take o) reason p =
+  p {accept = Map.insert o (ruling space o reason) p.accept, defeat = Map.delete o p.defeat, drop = Set.delete o p.drop}
+withRuling space (Refuse o) reason p =
+  p {defeat = Map.insert o (ruling space o reason) p.defeat, accept = Map.delete o p.accept, drop = Set.delete o p.drop}
+
+ruling :: Space -> OptionId -> Maybe Reason -> Ruling
 ruling space o reason = Ruling {title = titleOf space o, reason}
 
 -- | Returns the option a written id names: a listed option, or
 -- `<question>.other`.
 resolveOption :: Space -> Text -> Maybe OptionId
-resolveOption space = \t -> case Text.stripSuffix ".other" t of
-  Just q | Map.member (Id q) space.questions -> Just (Other (Id q))
-  _ -> (\(_, o) -> Listed o.id) <$> at (Id t)
+resolveOption space = \t -> case writtenOption t of
+  Just (q, Just "other") | Map.member q space.questions -> Just (Other q)
+  Just (i, Nothing) -> (\(_, o) -> Listed o.id) <$> at i
+  _ -> Nothing
   where
     at = optionAt space
+
+-- | Returns the id before the first `.` and the text after it; Nothing for an invalid id.
+writtenOption :: Text -> Maybe (Id, Maybe Text)
+writtenOption t
+  | validId i = Just (Id i, Text.stripPrefix "." rest)
+  | otherwise = Nothing
+  where
+    (i, rest) = Text.breakOn "." t
 
 -- | Returns a listed option's title; Nothing for an implicit other.
 titleOf :: Space -> OptionId -> Maybe Text

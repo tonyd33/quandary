@@ -1,5 +1,6 @@
 module Quandary.Core.Analyse
   ( QuestionState (..)
+  , Openness (..)
   , Analysis (..)
   , Standing (..)
   , Moved (..)
@@ -9,29 +10,39 @@ module Quandary.Core.Analyse
   , analyse
   , standing
   , verdictAt
-  , onlyOptionsMoved
+  , taken
   , bounds
+  , dominance
   , implications
   , topGrade
   , whyAll
   , edit
   , whatif
+  , Supposition (..)
+  , Step (..)
+  , Remark (..)
   , stale
+  , isOpen
+  , changedQuestions
   , staleness
   , stalePoints
   , everyStale
   , Adoption (..)
   , AdoptError (..)
+  , Confirmation (..)
   , adopt
   )
 where
 
 import Control.Monad (filterM, foldM, forM)
 import Data.Foldable (toList)
-import Data.List (sortOn)
+import Data.List (find, sortOn)
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing, mapMaybe, maybeToList)
+import Data.Ord (Down (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -41,7 +52,21 @@ import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 
-data QuestionState = Open | Closed | Deferred | Dormant
+data QuestionState = Open Openness | Closed | Deferred | Dormant
+  deriving (Eq, Ord, Show)
+
+isOpen :: QuestionState -> Bool
+isOpen (Open _) = True
+isOpen _ = False
+
+-- | Where an open question stands, the first that holds.
+data Openness
+  = -- | Some option is forced.
+    Taken
+  | -- | A root, or a raiser has every option forced.
+    Raised
+  | -- | Holds each raiser none of whose options is impossible.
+    Unraised (NonEmpty (NonEmpty OptionId))
   deriving (Eq, Ord, Show)
 
 data Analysis
@@ -75,11 +100,24 @@ analyse (Solver solving) m name = solving f $ \query ->
           | dormant = Dormant
           | closed q = Closed
           | Set.member q.id deferred = Deferred
-          | otherwise = Open
+          | otherwise = Open (openness verdicts q)
         dead r = not <$> reaches query (Set.union rulings (Set.fromList (map Take (toList r))))
         closed q = case q.pick of
-          One -> any (\o -> Map.lookup o verdicts == Just Forced) (choices q)
+          One -> not (null (taken verdicts q))
           _ -> all (\o -> Map.lookup o verdicts /= Just Possible) (choices q)
+
+-- | Preconditions: the question is open and not dormant.
+openness :: Map OptionId Verdict -> Question -> Openness
+openness verdicts q
+  | not (null (taken verdicts q)) = Taken
+  | null q.raisedBy || any (all forced) q.raisedBy = Raised
+  | otherwise = Unraised (NonEmpty.fromList [g | g <- q.raisedBy, all (\o -> Map.lookup o verdicts /= Just Impossible) g])
+  where
+    forced o = Map.lookup o verdicts == Just Forced
+
+-- | Returns the question's options every design reaching the point takes.
+taken :: Map OptionId Verdict -> Question -> [OptionId]
+taken verdicts q = [o | o <- choices q, Map.lookup o verdicts == Just Forced]
 
 verdictAt :: Analysis -> OptionId -> Maybe Verdict
 verdictAt a opt = standing a >>= Map.lookup opt . (.verdicts)
@@ -112,18 +150,18 @@ data Var
   deriving (Eq, Ord, Show)
 
 -- | Returns the bounds of each given option some design reaching the
--- point takes, given the point's analysis. An option commits to itself,
+-- point takes, given the point's standing. An option commits to itself,
 -- to the options taking it forces that the point does not, and to the
 -- options a design takes in the questions its commitments raise. A
 -- design's grade for the option is the lowest grade among the
 -- commitments it takes; an unverified grade counts toward the upper bound
 -- only.
-bounds :: Monad m => Solver m -> Model -> Text -> Analysis -> [OptionId] -> m (Map OptionId Bounds)
-bounds (Solver solving) m name analysis targets = case analysis of
-  Fresh s | not (null m.space.grades), not (null targets) -> solving formula (each s)
-  _ -> pure Map.empty
+bounds :: Monad m => Solver m -> Model -> Text -> Standing -> [OptionId] -> m (Map OptionId Bounds)
+bounds (Solver solving) m name s targets
+  | null m.space.grades || null targets = pure Map.empty
+  | otherwise = solving formula each
   where
-    each s query =
+    each query =
       fmap Map.fromList . forM [o | o <- targets, maybe False (/= Impossible) (Map.lookup o s.verdicts)] $ \o -> do
         -- A seed counts only if its commitments can reach an option graded
         -- below the cap.
@@ -139,11 +177,11 @@ bounds (Solver solving) m name analysis targets = case analysis of
       where
         forced = Map.keysSet (Map.filter (== Forced) s.verdicts)
     top = topGrade m.space
-    rank = Map.fromList (zip m.space.grades [0 ..])
+    positions = Map.fromList (zip m.space.grades [0 ..])
     at = optionAt m.space
     assessed (Listed i) = at i >>= (\(_, o) -> o.assessment)
     assessed (Other _) = Nothing
-    gradeOf a = Map.findWithDefault 0 a.grade rank
+    gradeOf a = Map.findWithDefault 0 a.grade positions
     low o = maybe 0 (\a -> if a.unverified then 0 else gradeOf a) (assessed o)
     high o = maybe top gradeOf (assessed o)
     -- For each grade above the lowest, the options graded below it and the
@@ -181,6 +219,18 @@ bounds (Solver solving) m name analysis targets = case analysis of
           r <- query.design (Set.unions [chosenRulings, Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)), Set.fromList [Refuse (Committed p) | p <- options, grade p < k]])
           maybe (go (k - 1)) (const (pure k)) r
 
+-- | Returns each option whose upper bound is below a sibling's lower
+-- bound, with the sibling of highest lower bound, the most preferred among
+-- equals.
+dominance :: Model -> Text -> Map OptionId Bounds -> Map OptionId OptionId
+dominance m name bs = Map.fromList (concatMap dominated (Map.elems m.space.questions))
+  where
+    ranks = preferenceAt m.points name
+    dominated q = [(o, p) | (o, b) <- graded, Just (p, best) <- [find ((/= o) . fst) leaders], b.hi < best.lo]
+      where
+        graded = mapMaybe (\o -> (,) o <$> Map.lookup o bs) (byPreference ranks q)
+        leaders = sortOn (Down . (.lo) . snd) graded
+
 -- | A question some options raise, with the bounds of its possible
 -- options, or none when it is dormant.
 data Implication = Implication
@@ -193,7 +243,7 @@ data Implication = Implication
 -- with the bounds of its possible options at the point.
 implications :: Monad m => Solver m -> Model -> Text -> Standing -> Set OptionId -> m [Implication]
 implications solver m name s os = do
-  bs <- bounds solver m name (Fresh s) (concatMap (possible . (.question)) (filter (not . dormant) rs))
+  bs <- bounds solver m name s (concatMap (possible . (.question)) (filter (not . dormant) rs))
   pure [Implication r (valuesAt bs r) | r <- rs]
   where
     rs = raisedQuestions m.space (Set.filter (\o -> Set.member (Take o) (rulingsOf m.points name)) os)
@@ -237,10 +287,6 @@ data Moved = Moved
   }
   deriving (Eq, Show)
 
--- | Holds when no question, branch or staleness moved.
-onlyOptionsMoved :: Moved -> Bool
-onlyOptionsMoved mv = null mv.questions && null mv.branches && stale mv.after == stale mv.before
-
 -- | Returns what moves at the named point and the points extending it
 -- between the two models.
 movement :: Monad m => Solver m -> Model -> Model -> Text -> m Moved
@@ -264,6 +310,11 @@ moved before after branches =
         , x /= y
         ]
       _ -> []
+
+-- | Returns the questions whose state moved, leaving out a move from open
+-- to open.
+changedQuestions :: Moved -> [(Id, QuestionState, QuestionState)]
+changedQuestions mv = [(q, x, y) | (q, x, y) <- mv.questions, not (isOpen x && isOpen y)]
 
 -- | Returns each minimal set of the point's rulings no design reaches, or
 -- Nothing when the point is fresh.
@@ -295,15 +346,85 @@ data Refusal
     WouldBeStale [Set Literal]
   deriving (Eq, Show)
 
--- | Apply the edits in order to the named point, returning the model as
--- changed and what moved. Refuses an accept or defeat that leaves the
--- point stale.
-edit :: Monad m => Solver m -> Model -> Text -> [Edit] -> m (Either Refusal (Model, Moved))
-edit solver m name es =
-  whatif solver m name es >>= \case
-    Left e -> pure (Left (Refused e))
-    Right (_, mv) | StaleAt why <- mv.after, any (isJust . ruledLiteral) es -> pure (Left (WouldBeStale why))
-    Right r -> pure (Right r)
+-- | One edit as applied to the named point.
+data Step = Step
+  { edit :: Edit
+  , applied :: [PointEdit]
+  -- ^ A settle's defeats, or the edit itself.
+  , before :: Model
+  -- ^ The model the edit applied to.
+  , model :: Model
+  -- ^ The model after the edit.
+  , moved :: Moved
+  , stated :: Set OptionId
+  -- ^ The moved options the edit accounts for: each it rules that took
+  -- its ruled verdict, and the implicit other of a question it rules in
+  -- or moves the state of, gone impossible.
+  , remarks :: [Remark]
+  }
+  deriving (Eq, Show)
+
+-- | A fact about an applied point edit beyond what moved.
+data Remark
+  = -- | The rulings before the edit already gave the option the verdict
+    -- ruled, with each set of them responsible.
+    AlreadyDecided OptionId Verdict [Set Literal]
+  | -- | A reopened option keeps its verdict, with each set of rulings
+    -- responsible.
+    StillDecided OptionId Verdict [Set Literal]
+  | -- | The point ruled the option the same way before; the old reason,
+    -- then the new.
+    ReasonChanged (Maybe Reason) (Maybe Reason)
+  | -- | The point inherits the same ruling from the named point.
+    AlsoRuledIn Text
+  | -- | Accepting forces a raiser of the option's question that nothing
+    -- rules.
+    CommitsToRaiser OptionId
+  | -- | A ranked option no design reaching the point takes.
+    ImpossibleHere OptionId
+  deriving (Eq, Show)
+
+-- | Apply the edits in order to the named point, returning a step for
+-- each. Refuses an accept or defeat that leaves the point stale; the
+-- refusal holds the model the refused edit applies to.
+edit :: Monad m => Solver m -> Model -> Text -> [Edit] -> m (Either (Model, Refusal) [Step])
+edit solver m0 name es = do
+  before <- analyse solver m0 name
+  was <- stalePoints solver m0 ns
+  go m0 before was [] es
+  where
+    ns = descendants m0.points name
+    go _ _ _ done [] = pure (Right (reverse done))
+    go m before was done (e : rest) = case expandedOnto m before e of
+      Left err -> pure (Left (m, Refused err))
+      Right (pes, m') -> do
+        after <- analyse solver m' name
+        now <- stalePoints solver m' ns
+        branches <- restaled solver m' ns was now
+        let mv = moved before after branches
+        case after of
+          StaleAt why | any (isJust . ruledLiteral) pes -> pure (Left (m, WouldBeStale why))
+          _ -> do
+            rs <- concat <$> traverse (remarksOn solver (Change m m' name mv)) pes
+            go m' after now (Step e pes m m' mv (statedBy m.space pes mv) rs : done) rest
+    expandedOnto m before e = do
+      pes <- expanded before e
+      m' <- foldM applyHere m pes
+      pure (pes, m')
+    applyHere m = applied m name
+
+-- | Returns the point edits an edit makes, a settle defeating the options
+-- of its question the analysis leaves possible.
+expanded :: Analysis -> Edit -> Either EditError [PointEdit]
+expanded _ (Rule e) = Right [e]
+expanded (StaleAt _) (Settle q _) = Left (SettlesStale q.id)
+expanded (Fresh s) (Settle q r) = Right [Defeat o r | o <- listedThenOther q, Map.lookup o s.verdicts == Just Possible]
+
+-- | Returns each named point stale in one of the sets and not the other,
+-- with the sets of rulings no design reaches when it is stale in the
+-- model.
+restaled :: Monad m => Solver m -> Model -> [Text] -> Set Text -> Set Text -> m [(Text, Maybe [Set Literal])]
+restaled solver m ns was now = forM [n | n <- ns, Set.member n was /= Set.member n now] $ \n -> (,) n <$> staleness solver m n
 
 -- | Returns each point extending the named one whose staleness differs
 -- between the two models, with the sets of rulings no design reaches
@@ -312,19 +433,85 @@ extending :: Monad m => Solver m -> Model -> Model -> Text -> m [(Text, Maybe [S
 extending solver m m' name = do
   was <- stalePoints solver m ns
   now <- stalePoints solver m' ns
-  forM [n | n <- ns, Set.member n was /= Set.member n now] $ \n -> (,) n <$> staleness solver m' n
+  restaled solver m' ns was now
   where
     ns = descendants m.points name
 
--- | Returns the model with the edits applied in order, and what would
--- move.
-whatif :: Monad m => Solver m -> Model -> Text -> [Edit] -> m (Either EditError (Model, Moved))
-whatif solver m name es = case applyEdits m name es of
+data Change = Change
+  { before :: Model
+  , after :: Model
+  , name :: Text
+  , moved :: Moved
+  }
+
+-- | Returns the remarks on the point edit making the change.
+remarksOn :: Monad m => Solver m -> Change -> PointEdit -> m [Remark]
+remarksOn solver c (Accept o r) = (++ committedRaisers c o) <$> ruledAgain solver c (Take o) r
+remarksOn solver c (Defeat o r) = ruledAgain solver c (Refuse o) (Just r)
+remarksOn solver c (Reopen o) = case verdictAt c.moved.after o of
+  Just v | v /= Possible -> pure . StillDecided o v <$> causes solver c.after c.name o v
+  _ -> pure []
+remarksOn _ c (Prefer o (Just _)) = pure [ImpossibleHere o | verdictAt c.moved.before o == Just Impossible]
+remarksOn _ _ _ = pure []
+
+ruledAgain :: Monad m => Solver m -> Change -> Literal -> Maybe Reason -> m [Remark]
+ruledAgain solver c l r = case rulingFrom c.before.points c.name l of
+  Just (p, old)
+    | p == c.name -> pure [ReasonChanged old.reason r]
+    | otherwise -> pure [AlsoRuledIn p]
+  Nothing
+    | verdictAt c.moved.before o == Just v -> pure . AlreadyDecided o v <$> causes solver c.before c.name o v
+    | otherwise -> pure []
+  where
+    o = optionOf l
+    v = assertedVerdict l
+
+causes :: Monad m => Solver m -> Model -> Text -> OptionId -> Verdict -> m [Set Literal]
+causes solver m name o v = whyAll solver m.space (rulingsOf m.points name) (if v == Forced then Refuse o else Take o)
+
+committedRaisers :: Change -> OptionId -> [Remark]
+committedRaisers c o =
+  [ CommitsToRaiser r
+  | q <- maybeToList (questionContaining c.before.space o)
+  , r <- concatMap toList q.raisedBy
+  , verdictAt c.moved.before r /= Just Forced
+  , verdictAt c.moved.after r == Just Forced
+  , isNothing (rulingFrom c.after.points c.name (Take r))
+  ]
+
+-- | Returns the moved options the applied edits account for.
+statedBy :: Space -> [PointEdit] -> Moved -> Set OptionId
+statedBy space pes mv = Set.fromList [o | (o, _, v) <- mv.options, isRuled o v || isImplied o v]
+  where
+    ruled = mapMaybe ruledLiteral pes
+    isRuled o Forced = Take o `elem` ruled
+    isRuled o Impossible = Refuse o `elem` ruled
+    isRuled _ _ = False
+    isImplied (Other q) Impossible =
+      q `elem` [x | (x, _, _) <- changedQuestions mv] || Just q `elem` map (questionOf space . optionOf) ruled
+    isImplied _ _ = False
+
+withPoint :: Model -> Text -> Point -> Model
+withPoint m name p = m {points = Map.insert name p m.points}
+
+applied :: Model -> Text -> PointEdit -> Either EditError Model
+applied m name e = withPoint m name <$> applyEdit m.space m.points name e
+
+-- | A ruling supposed without a reason, or a point edit.
+data Supposition
+  = Suppose Literal
+  | Apply PointEdit
+  deriving (Eq, Show)
+
+-- | Returns the model with the suppositions applied in order, and what
+-- would move.
+whatif :: Monad m => Solver m -> Model -> Text -> [Supposition] -> m (Either EditError (Model, Moved))
+whatif solver m name ss = case foldM supposing m ss of
   Left e -> pure (Left e)
   Right m' -> Right . (,) m' <$> movement solver m m' name
-
-applyEdits :: Model -> Text -> [Edit] -> Either EditError Model
-applyEdits m name es = (\points -> m {points}) <$> foldM (\ps e -> (\p -> Map.insert name p ps) <$> applyEdit m.space ps name e) m.points es
+  where
+    supposing now (Suppose l) = pure (withPoint now name (withRuling now.space l Nothing (pointNamed now.points name)))
+    supposing now (Apply e) = applied now name e
 
 data Adoption = Adoption
   { model :: Model
@@ -339,8 +526,14 @@ data Adoption = Adoption
   }
   deriving (Eq, Show)
 
+-- | Whether the user confirmed a proposed branch's rulings.
+data Confirmation = Confirmed | Unconfirmed
+  deriving (Eq, Show)
+
 data AdoptError
   = UnknownBranch
+  | -- | The branch is proposed and the adoption unconfirmed.
+    Proposed
   | ExtendsNothing
   | -- | Holds each minimal set of the branch's rulings no design reaches.
     StaleBranch [Set Literal]
@@ -350,10 +543,12 @@ data AdoptError
 -- branch. Points extending the branch extend that point instead. Any
 -- other point extending that point which the adoption leaves stale drops
 -- the fewest adopted rulings that clear its conflicts, and loses the
--- rulings it now inherits unchanged.
-adopt :: Monad m => Solver m -> Model -> Text -> m (Either AdoptError Adoption)
-adopt solver m name = case Map.lookup name m.points of
+-- rulings it now inherits unchanged. A proposed branch needs the
+-- confirmation.
+adopt :: Monad m => Solver m -> Model -> Text -> Confirmation -> m (Either AdoptError Adoption)
+adopt solver m name confirmation = case Map.lookup name m.points of
   Nothing -> pure (Left UnknownBranch)
+  Just b | b.proposed, confirmation == Unconfirmed -> pure (Left Proposed)
   Just b -> case b.extends of
     Nothing -> pure (Left ExtendsNothing)
     Just parent ->

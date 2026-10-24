@@ -288,6 +288,13 @@ cli =
         (code, out, _) <- quandary dir ["--point", "broken", "status"]
         code @?= ExitFailure 1
         assertBool out ("stale: no design holds these rulings:" `isInfixOf` out)
+    , testCase "settle at a stale point is refused" $ withCopy $ \dir -> do
+        writeFile (dir </> "points/broken.md") "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
+        before <- readFile' (dir </> "points/broken.md")
+        r <- quandary dir ["--point", "broken", "settle", "sync/how", "--", "all", "of", "it"]
+        r @?= (ExitFailure 1, "", "quandary: sync/how cannot be settled: the point is stale\n")
+        later <- readFile' (dir </> "points/broken.md")
+        later @?= before
     , testCase "reopen takes several ids" $ withCopy $ \dir -> do
         (code, out, _) <- quandary dir ["--point", "edit-offline", "reopen", "sync/git", "conflict/diff", "store/files"]
         code @?= ExitSuccess
@@ -368,6 +375,15 @@ cli =
     , testCase "a reason starting with an unknown id" $ withCopy $ \dir -> do
         r <- quandary dir ["accept", "sync/git", "conflict/dif", "typo"]
         r @?= (ExitFailure 1, "", "quandary: unknown option conflict/dif\n")
+    , testCase "an id with capitals after the options is an unknown option" $ withCopy $ \dir -> do
+        r <- quandary dir ["defeat", "sync/lww", "Sync/Crdt", "because"]
+        r @?= (ExitFailure 1, "", "quandary: unknown option Sync/Crdt\n")
+    , testCase "an id with a dot after the options is an unknown option" $ withCopy $ \dir -> do
+        r <- quandary dir ["defeat", "sync/lww", "sync/how.othr", "because"]
+        r @?= (ExitFailure 1, "", "quandary: unknown option sync/how.othr\n")
+    , testCase "whatif defeat names its supposed ruling without a reason" $ withCopy $ \dir -> do
+        (_, out, _) <- quandary dir ["whatif", "defeat", "store/files"]
+        assertBool out ("  defeat store/files (current)" `elem` lines out)
     , testCase "a usage error" $ withCopy $ \dir -> do
         (code, _, err) <- quandary dir ["frobnicate"]
         code @?= ExitFailure 1

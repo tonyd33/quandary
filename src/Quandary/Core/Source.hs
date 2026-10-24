@@ -189,6 +189,7 @@ data Issue
     TitleMismatch OptionId Text Text
   | TitleOnOther OptionId
   | BadRank Text
+  | EmptyReason
   | BadProposed Text
   | BadUnverified Text
   | -- | A grade name that is not letters, digits, `-` and `_`.

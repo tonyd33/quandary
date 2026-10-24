@@ -10,4 +10,4 @@ import Quandary.Shell.Rule qualified as Rule
 import System.Exit (ExitCode (..))
 
 run :: Env -> Text -> IO ExitCode
-run env q = Resolve.withQuestion env.model.space q $ \question -> Rule.rule env [Defer question.id]
+run env q = Resolve.withQuestion env.model.space q $ \question -> Rule.rule env [Rule (Defer question.id)]

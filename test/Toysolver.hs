@@ -1,4 +1,4 @@
-module Quandary.Shell.Solver.Toysolver (toysolver) where
+module Toysolver (toysolver) where
 
 import Quandary.Core.Solver (Sat (..), Solve, Solver, fromSat)
 import ToySolver.SAT qualified as SAT

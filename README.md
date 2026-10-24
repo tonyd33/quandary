@@ -252,7 +252,7 @@ prefer: {sync/git: 8, sync/crdt: 6}
 | `defer` | questions left off frontier |
 | `prefer` | option to rank, integer 0 to 10, for display order |
 
-Ruling records option's title when made; ruling whose title no longer matches = problem, settled by ruling again or restoring title. Ruling on `<question>.other` records no title.
+Ruling records option's title when made; ruling whose title no longer matches = problem, settled by ruling again or restoring title. Ruling on `<question>.other` records no title. Reason, when given, is never blank.
 
 Point's own ruling on option replaces inherited one; dropped option inherits none. Point that accepts and defeats one option, drops option it rules, or drops one no extended point rules = problem.
 
@@ -298,14 +298,14 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 | command | does |
 |---|---|
 | `check` | report every problem in space and points, every stale point; exit 1 if any, else print `ok` |
-| `status` | frontier in decision order, each question's possible options by preference, with bounds unless spanning every grade; then open questions with option taken; then open questions no taken option raises, with raisers; then closed, deferred, dormant questions; then every point: fresh or stale, proposed, whether it rules anything beyond point it extends |
+| `status` | frontier in decision order, each question's possible options by preference, with bounds unless spanning every grade; then open questions with option taken; then other open questions no taken option raises, with raisers; then closed, deferred, dormant questions; then every point: fresh or stale, proposed, whether it rules anything beyond point it extends |
 | `show QUESTION` | options with verdicts, rulings, grades, bounds, whether one dominated; under each option, each question it raises, once, with title, and on line below, options raising it alongside: `with a`, `with any of a, (b with c)`; none when option raises it alone |
 | `why OPTION` | every set of rulings making `OPTION` impossible or forced |
 | `whatif VERB ID ... [VERB ID ...]` | changes if rulings applied, with every conflicting set of rulings if they leave point stale; unless stale, then `raises`: every question accepted options raise, with title and co-raisers as in `show`, `[dormant]` when live in no design reaching new point, else options as in `status` at new point; each verb `accept`, `defeat` or `reopen` followed by ids, no reasons |
 | `accept OPTION... [--] [REASON]` | accept each; refuses, writing nothing, if any would leave point stale |
 | `defeat OPTION... [--] REASON` | defeat each; refuses, writing nothing, if any would leave point stale |
 | `exhaust QUESTION... [--] REASON` | defeat each `QUESTION.other`: listed options all there is; refuses, writing nothing, if any would leave point stale |
-| `settle QUESTION... [--] REASON` | defeat every still-possible option of each question, `.other` included: what's taken is all of it; refuses, writing nothing, if any would leave point stale |
+| `settle QUESTION... [--] REASON` | defeat every still-possible option of each question, `.other` included: what's taken is all of it; refuses, writing nothing, at stale point or if any would leave point stale |
 | `reopen ID...` | for each, drop point's own ruling on option, else drop inherited one; or drop question's deferral |
 | `defer QUESTION` | leave off frontier |
 | `prefer OPTION N` | rank 0 to 10, `-` to clear |

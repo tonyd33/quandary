@@ -70,7 +70,6 @@ library
     Quandary.Shell.Resolve
     Quandary.Shell.Rule
     Quandary.Shell.Solver.Cadical
-    Quandary.Shell.Solver.Toysolver
     Quandary.Shell.Storage.Files
     Quandary.Shell.Storage.Yaml
   build-depends:
@@ -83,7 +82,6 @@ library
     , libyaml
     , optparse-applicative
     , text
-    , toysolver
   pkgconfig-depends: cadical
   extra-libraries:   stdc++
 
@@ -109,6 +107,7 @@ test-suite spec
     Properties
     Solvers
     Storage
+    Toysolver
   build-depends:
     , bytestring
     , containers
@@ -123,3 +122,4 @@ test-suite spec
     , tasty-quickcheck
     , temporary
     , text
+    , toysolver

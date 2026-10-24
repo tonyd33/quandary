@@ -6,7 +6,7 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
-import Fixtures (fixture, modelOf)
+import Fixtures (because, fixture, modelOf)
 import Quandary.Core.Compile (compile)
 import Quandary.Core.Rulings (rulingsOf)
 import Quandary.Core.Solver
@@ -49,7 +49,7 @@ notesSync =
       m <- modelOf fixture
       let p = m.points Map.! "current"
       Map.keys p.accept @?= [Listed (Id "store/files")]
-      (p.accept Map.! Listed (Id "store/files")).reason @?= Just "must open in any editor"
+      (p.accept Map.! Listed (Id "store/files")).reason @?= Just (because "must open in any editor")
       (m.points Map.! "edit-offline").extends @?= Just "current"
   , testCase "current rules out the database" $ do
       m <- modelOf fixture
@@ -238,6 +238,12 @@ pointProblems =
   , testCase "a defeat without a reason" $
       problemsOf [space, point "current" ["defeat:", "  a: {title: A}"]]
         >>= (@?= [("points/current.md", Just 3, Semantic (Missing ReasonField))])
+  , testCase "an accept with an empty reason" $
+      problemsOf [space, point "current" ["accept:", "  a: {title: A, reason: \"\"}"]]
+        >>= (@?= [("points/current.md", Just 3, Semantic EmptyReason)])
+  , testCase "a defeat with a blank reason" $
+      problemsOf [space, point "current" ["defeat:", "  a: {title: A, reason: \"  \"}"]]
+        >>= (@?= [("points/current.md", Just 3, Semantic EmptyReason)])
   , testCase "accepted and defeated in one point" $
       problemsOf [space, point "current" ["accept:", "  a: {title: A}", "defeat:", "  a: {title: A, reason: r}"]]
         >>= (@?= [("points/current.md", Nothing, Semantic (AcceptedAndDefeated (Listed (Id "a"))))])

@@ -5,8 +5,8 @@ module Quandary.Core.Validate
   )
 where
 
-import Control.Monad (forM, forM_, unless, when)
-import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Control.Monad (forM, forM_, join, unless, when)
+import Data.Char (isAsciiLower, isDigit)
 import Data.List (sortOn)
 import Data.List.NonEmpty (nonEmpty)
 import Data.Map.Strict (Map)
@@ -15,7 +15,7 @@ import Data.Maybe (catMaybes, isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Quandary.Core.Rulings (current, effective, emptyPoint, parseRank)
+import Quandary.Core.Rulings (current, effective, emptyPoint)
 import Quandary.Core.Source
 import Quandary.Core.Types
 
@@ -102,12 +102,12 @@ optionIdOf q o = q.scope <> o.key.value
 checkIds :: Sources -> Check ()
 checkIds sources = do
   forM_ sources.questions $ \q -> do
-    validId q.id
+    checkId q.id
     forM_ q.options $ \o -> do
-      validSegment o.key
+      checkSegment o.key
       when (Text.toLower o.key.value == "other") (report o.key.at ReservedKey)
-  forM_ sources.notes (validId . (.id))
-  forM_ sources.points (validId . (.name))
+  forM_ sources.notes (checkId . (.id))
+  forM_ sources.points (checkId . (.name))
   forM_ (sortOn (folded . fst) (repeats folded nodes)) $ \(first, n) ->
     report n.at (Collision n.value first.at)
   where
@@ -116,18 +116,19 @@ checkIds sources = do
       [q.id | q <- sources.questions]
         ++ [Located o.key.at (optionIdOf q o) | q <- sources.questions, o <- q.options]
         ++ [n.id | n <- sources.notes]
-    validId l = unless (all segment (Text.splitOn "/" l.value)) (report l.at (BadId l.value))
-    validSegment l = unless (segment l.value) (report l.at (BadId l.value))
 
-segment :: Text -> Bool
-segment t = not (Text.null t) && Text.all (\c -> isAsciiLower c || isAsciiUpper c || isDigit c || c == '-' || c == '_') t
+checkId :: Located Text -> Check ()
+checkId l = unless (validId l.value) (report l.at (BadId l.value))
+
+checkSegment :: Located Text -> Check ()
+checkSegment l = unless (validSegment l.value) (report l.at (BadId l.value))
 
 checkGrades :: ConfigSource -> Check [Text]
 checkGrades c = case c.grades of
   Nothing -> pure []
   Just (Located l []) -> [] <$ report l (EmptyList GradesField)
   Just (Located _ gs) -> do
-    forM_ gs $ \g -> unless (segment g.value) (report g.at (BadGrade g.value))
+    forM_ gs $ \g -> unless (validSegment g.value) (report g.at (BadGrade g.value))
     forM_ (repeats (.value) gs) $ \(_, g) -> report g.at (DuplicateGrade g.value)
     pure (map (.value) gs)
 
@@ -259,10 +260,10 @@ checkPoints names space sources = do
         Just i -> pure (Just i)
     prefer <- fmap catMaybes . forM p.prefer $ \(o, n) -> do
       oid <- resolveOption names o
-      rank <- case parseRank n.value of
+      ranked <- case parseRank n.value of
         Just r -> pure (Just r)
         Nothing -> Nothing <$ report n.at (BadRank n.value)
-      pure ((,) <$> oid <*> rank)
+      pure ((,) <$> oid <*> ranked)
     pure
       Point
         { name = p.name.value
@@ -304,8 +305,13 @@ checkPoints names space sources = do
           (Listed _, Nothing) -> report r.option.at (Missing TitleField)
           (Listed i, Just t) -> forM_ (listed i) $ \(_, now) ->
             when (now.title /= t.value) (report t.at (TitleMismatch o t.value now.title))
+        reason <- join <$> traverse checkReason r.reason
         when (needsReason && not (isJust r.reason)) (report r.option.at (Missing ReasonField))
-        pure (o, Ruling {title = (.value) <$> r.title, reason = (.value) <$> r.reason})
+        pure (o, Ruling {title = (.value) <$> r.title, reason})
+
+-- | Returns the reason, or Nothing after reporting a blank one.
+checkReason :: Located Text -> Check (Maybe Reason)
+checkReason t = maybe (Nothing <$ report t.at EmptyReason) (pure . Just) (parseReason t.value)
 
 -- | Returns the point and the points it extends, nearest first, or the
 -- names on a cycle.

@@ -5,17 +5,16 @@ import Control.Monad (forM)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Fixtures (modelAt)
 import Gen
-import Quandary.Core.Analyse (Analysis (..), Bounds (..), Implication (..), Moved (..), QuestionState (..), Standing (..), analyse, bounds, implications, whatif)
+import Quandary.Core.Analyse (Analysis (..), Bounds (..), Implication (..), Moved (..), QuestionState (..), Standing (..), Supposition (..), analyse, bounds, dominance, implications, whatif)
 import Quandary.Core.Compile (compile)
-import Quandary.Core.Rulings (Edit (..), pointNamed)
 import Quandary.Core.Solver
 import Quandary.Core.Types
-import Quandary.Core.Validate (Model (..))
 import Quandary.Shell.Solver.Cadical (cadical)
-import Quandary.Shell.Solver.Toysolver (toysolver)
 import Test.Tasty
 import Test.Tasty.QuickCheck
+import Toysolver (toysolver)
 
 properties :: TestTree
 properties =
@@ -59,10 +58,26 @@ properties =
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
             consistent p ==>
-              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver -> do
-                a <- analyse solver (modelAt space p) "current"
-                found <- bounds solver (modelAt space p) "current" a (Set.toList (compile space).variables)
-                pure (found === bestDesigns space p)
+              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
+                analyse solver (modelAt space p) "current" >>= \case
+                  StaleAt _ -> pure (bestDesigns space p === Map.empty)
+                  Fresh s -> (=== bestDesigns space p) <$> bounds solver (modelAt space p) "current" s (Set.toList (compile space).variables)
+    , testProperty "an option is dominated when its upper bound is below a sibling's lower bound" $
+        forAll (genSpace >>= genGraded) $ \space ->
+          forAll (genPoint space) $ \p ->
+            consistent p ==>
+              ioProperty $
+                analyse cadical (modelAt space p) "current" >>= \case
+                  StaleAt _ -> pure discard
+                  Fresh s -> do
+                    bs <- bounds cadical (modelAt space p) "current" s (Set.toList (compile space).variables)
+                    let dominated = dominance (modelAt space p) "current" bs
+                        best = bestDesigns space p
+                        sibling o o' = o /= o' && questionOf space o == questionOf space o'
+                        below o o' = (best Map.! o).hi < (best Map.! o').lo
+                    pure $
+                      Map.keysSet dominated === Set.fromList [o | o <- Map.keys best, any (\o' -> sibling o o' && below o o') (Map.keys best)]
+                        .&&. conjoin [counterexample (show (o, o')) (sibling o o' && below o o') | (o, o') <- Map.toList dominated]
     , testProperty "whatif accept bounds each question the option raises at the point it reaches" $
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
@@ -70,7 +85,7 @@ properties =
               let p' = Set.insert (Take o) (Set.delete (Refuse o) p)
                in consistent p' ==>
                     ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
-                      whatif solver (modelAt space p) "current" [Accept o Nothing] >>= \case
+                      whatif solver (modelAt space p) "current" [Suppose (Take o)] >>= \case
                         Left e -> pure (counterexample (show e) False)
                         Right (_, Moved {after = StaleAt _}) -> pure (property True)
                         Right (m', Moved {after = Fresh s}) -> do
@@ -98,22 +113,6 @@ weakens (Reaches old) (Reaches new) =
     | (o, a) <- Map.toList new
     , Just b <- [Map.lookup o old]
     ]
-
--- | Returns a model whose `current` holds the rulings.
-modelAt :: Space -> Set Literal -> Model
-modelAt space p =
-  Model
-    { space
-    , points =
-        Map.singleton
-          "current"
-          (pointNamed Map.empty "current")
-            { accept = Map.fromList [(o, ruling) | Take o <- Set.toList p]
-            , defeat = Map.fromList [(o, ruling) | Refuse o <- Set.toList p]
-            }
-    }
-  where
-    ruling = Ruling {title = Nothing, reason = Just "r"}
 
 -- | Decide the bounds from the semantics' prose: over every valid design
 -- holding the rulings and taking the option, the best lowest grade among
@@ -145,7 +144,7 @@ bestDesigns space p =
           go cs = let cs' = grow cs in if cs' == cs then cs else go cs'
        in go seeds
     top = length space.grades - 1
-    rank g = length (takeWhile (/= g) space.grades)
+    position g = length (takeWhile (/= g) space.grades)
     assessed = Map.fromList [(Listed o.id, a) | q <- Map.elems space.questions, o <- q.options, Just a <- [o.assessment]]
-    low o = maybe 0 (\a -> if a.unverified then 0 else rank a.grade) (Map.lookup o assessed)
-    high o = maybe top (rank . (.grade)) (Map.lookup o assessed)
+    low o = maybe 0 (\a -> if a.unverified then 0 else position a.grade) (Map.lookup o assessed)
+    high o = maybe top (position . (.grade)) (Map.lookup o assessed)
