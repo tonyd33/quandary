@@ -1,6 +1,7 @@
 module Quandary.Shell.Cli (main) where
 
 import Control.Monad (forM_)
+import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Quandary.Core.Validate
 import Quandary.Shell.Command.Accept qualified as Accept
@@ -29,6 +30,7 @@ import Quandary.Shell.Options (Action (..), Command (..), Options (..))
 import Quandary.Shell.Options qualified as Options
 import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Storage.Files qualified as Files
+import System.Directory (doesDirectoryExist)
 import System.Exit (ExitCode, exitWith)
 import System.IO (stderr)
 
@@ -37,8 +39,8 @@ main = Options.parse >>= run >>= exitWith
 
 run :: Options -> IO ExitCode
 run o = case o.command of
-  Browse -> Browse.run o.dir o.point
-  Serve port -> Serve.run o.dir o.point port
+  Browse -> watched (Browse.run o.dir o.point)
+  Serve port -> watched (Serve.run o.dir o.point port)
   Check -> do
     (loaded, v) <- validated
     Check.run o.dir (Files.problemsOf o.dir loaded v) v.model
@@ -52,6 +54,9 @@ run o = case o.command of
     validated = do
       loaded <- Files.readSpace o.dir
       pure (loaded, validate loaded.sources)
+    watched frontend = do
+      exists <- doesDirectoryExist o.dir
+      if exists then frontend else failWith (Text.pack o.dir <> " is not a directory")
 
 dispatch :: Env -> Action -> IO ExitCode
 dispatch env Status = Status.run env

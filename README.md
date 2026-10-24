@@ -350,7 +350,7 @@ Order: question comes after questions of its raisers. Of questions that may come
 | `p` | pick point (`j`/`k`, `enter`, `esc`) |
 | `w` | on option: whatif, then `a` accept, `d` defeat, `r` reopen, `esc` cancel |
 | `backspace` | back to previous page |
-| `q` | quit |
+| `q`, ctrl-c | quit |
 
 `serve` URLs, ids as written:
 

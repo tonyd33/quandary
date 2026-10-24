@@ -30,6 +30,10 @@ cli =
         (code, out, _) <- quandary dir ["check"]
         code @?= ExitFailure 1
         lines out @?= [dir </> "points/broken.md: the point is stale"]
+    , testCase "browse and serve refuse a directory that does not exist" $ withCopy $ \dir -> do
+        let missing = dir </> "missing"
+        results <- mapM (quandary missing) [["browse"], ["serve"]]
+        [(code, err) | (code, _, err) <- results] @?= replicate 2 (ExitFailure 1, "quandary: " <> missing <> " is not a directory\n")
     , testCase "a command refuses a space with problems" $ withCopy $ \dir -> do
         writeFile (dir </> "questions/bad.md") "no frontmatter\n"
         (code, out, err) <- quandary dir ["status"]

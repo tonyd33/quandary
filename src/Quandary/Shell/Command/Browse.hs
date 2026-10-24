@@ -61,6 +61,7 @@ browser =
 
 handle :: BrickEvent Name Changed -> EventM Name Tui ()
 handle (AppEvent (Changed _)) = refresh
+handle (VtyEvent (Vty.EvKey (Vty.KChar 'c') [Vty.MCtrl])) = halt
 handle (VtyEvent (Vty.EvKey k [])) =
   gets (.overlay) >>= \case
     Just o -> overlayKey o k
