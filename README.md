@@ -117,7 +117,7 @@ conflict/shown   open      closed
 
 To take branch, `quandary adopt offline-edit` moves its rulings into `current`, removes it.
 
-`quandary check` reports every problem in files; `quandary graph` prints space as Mermaid flowchart. Rest of README = reference.
+`quandary check` reports every problem in files; `quandary graph` prints space as Mermaid flowchart, `quandary graph --format dot` as Graphviz digraph. Rest of README = reference.
 
 ## A space
 
@@ -315,7 +315,7 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 | `rulings` | point's rulings, inherited included, each with point it comes from |
 | `links` | each link label in use, with link count |
 | `diff POINT POINT` | each question whose state or options differ between two points |
-| `graph` | space as Mermaid flowchart, options coloured by verdict |
+| `graph [--format mermaid\|dot]` | space as Mermaid flowchart (default) or Graphviz digraph, options coloured by verdict; in `dot`, each question a cluster holding its options |
 
 Ruling command names what it did, then prints what moved: one line per question touched, its state change and new verdicts of options it didn't rule, by key (`.other` only when forced, or when question neither changed state nor holds ruled option), and points extending this one that went stale or fresh. Also says when option already forced or impossible, with one responsible set of rulings and how many more `why` lists; still is after `reopen`, with every set; or ranked while impossible. Gives old and new reason when option ruled same way again (no reason clears it), and names raiser an accept commits to that no ruling takes. Refusal names every conflicting set of rulings, and `pick: one` question two of them answer. Every command but `check` refuses space with problems, except ruling's out-of-date title. `status`, `show`, `why`, `diff` exit 1 at stale point.
 

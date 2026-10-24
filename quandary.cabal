@@ -65,6 +65,8 @@ library
     Quandary.Shell.Env
     Quandary.Shell.Exit
     Quandary.Shell.Options
+    Quandary.Shell.Render.Dot
+    Quandary.Shell.Render.Graph
     Quandary.Shell.Render.Mermaid
     Quandary.Shell.Render.Text
     Quandary.Shell.Resolve

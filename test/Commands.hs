@@ -12,6 +12,8 @@ import Quandary.Core.Order (decisionOrder)
 import Quandary.Core.Rulings
 import Quandary.Core.Types hiding (rank)
 import Quandary.Core.Validate (Model (..))
+import Quandary.Shell.Render.Dot qualified as Dot
+import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Render.Mermaid qualified as Mermaid
 import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Solver.Cadical (cadical)
@@ -207,10 +209,41 @@ rendering =
       a <- analyse cadical m "current"
       pure (Render.showQuestion m "current" a Map.empty Map.empty (m.space.questions Map.! Id "sync/how"))
   , golden "why" $ \m -> Render.why m "current" (listed "sync/crdt") Impossible <$> whyAll cadical m.space (rulingsOf m.points "current") (Take (listed "sync/crdt"))
-  , golden "graph" $ \m -> do
-      a <- analyse cadical m "current"
-      pure (Mermaid.graph m.space ((.verdicts) <$> standing a))
+  , golden "graph" $ \m -> Mermaid.graph <$> spaceGraph m
+  , golden "graph-dot" $ \m -> Dot.graph <$> spaceGraph m
+  , testCase "dot joins options raising together and draws forbid entries" $ do
+      let base = question "a" One [] [option "x", option "y"]
+          raised = question "b" One [listed "x" :| [listed "y"]] [option "z"]
+          space = spaceOf [base {forbid = [Forbid (Set.fromList [Take (listed "x"), Refuse (listed "z")]) (Just "no")]}, raised]
+      Text.lines (Dot.graph (Graph.build space Nothing))
+        @?= [ "digraph space {"
+            , "  rankdir=LR"
+            , "  compound=true"
+            , "  node [shape=box, style=rounded]"
+            , "  subgraph \"cluster_a\" {"
+            , "    label=\"a: \""
+            , "    \"x\" [label=\"x: \"]"
+            , "    \"y\" [label=\"y: \"]"
+            , "    \"a.other\" [label=\"a.other\"]"
+            , "  }"
+            , "  subgraph \"cluster_b\" {"
+            , "    label=\"b: \""
+            , "    \"z\" [label=\"z: \"]"
+            , "    \"b.other\" [label=\"b.other\"]"
+            , "  }"
+            , "  \"joint b 0\" [shape=circle, label=\"all of\"]"
+            , "  \"joint b 0\" -> \"b.other\" [lhead=\"cluster_b\", penwidth=2]"
+            , "  \"x\" -> \"joint b 0\" [dir=none]"
+            , "  \"y\" -> \"joint b 0\" [dir=none]"
+            , "  \"forbid 0\" [shape=hexagon, label=\"forbid: no\"]"
+            , "  \"forbid 0\" -> \"x\" [style=dotted, dir=none, label=\"with\"]"
+            , "  \"forbid 0\" -> \"z\" [style=dotted, dir=none, label=\"without\"]"
+            , "}"
+            ]
   ]
   where
+    spaceGraph m = do
+      a <- analyse cadical m "current"
+      pure (Graph.build m.space ((.verdicts) <$> standing a))
     golden name render =
       goldenVsString name ("test/golden/" <> name <> ".txt") (Lazy.fromStrict . Text.encodeUtf8 <$> (model >>= render))

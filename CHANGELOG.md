@@ -7,6 +7,10 @@
 - **Blank reasons are problems**: `check` reports a `reason` that is empty or only whitespace, and a space holding one no longer loads until it is fixed.
 - **`settle` refuses a stale point**: `settle` at a stale point is now refused, writing nothing. Previously it reported the question settled without defeating anything.
 
+### New Features
+
+- `graph --format dot` prints the space as a Graphviz digraph, each question a cluster holding its options. `graph` alone still prints Mermaid.
+
 ### Improvements
 
 - `show` now prints each question an option raises once, with its title. Options that raise it together with that option go on a `with any of` line under it.

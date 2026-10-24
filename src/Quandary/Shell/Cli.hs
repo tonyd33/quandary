@@ -70,4 +70,4 @@ dispatch env (Adopt name confirmation) = Adopt.run env name confirmation
 dispatch env Rulings = Rulings.run env
 dispatch env Links = Links.run env
 dispatch env (Diff a b) = Diff.run env a b
-dispatch env Graph = Graph.run env
+dispatch env (Graph f) = Graph.run env f

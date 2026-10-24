@@ -2,6 +2,7 @@ module Quandary.Shell.Options
   ( Options (..)
   , Command (..)
   , Action (..)
+  , Format (..)
   , parse
   )
 where
@@ -41,7 +42,9 @@ data Action
   | Rulings
   | Links
   | Diff Text Text
-  | Graph
+  | Graph Format
+
+data Format = Mermaid | Dot
 
 parse :: IO Options
 parse = execParser (info (options <**> helper <**> versionOption) (fullDesc <> progDesc "Explore a design space"))
@@ -72,8 +75,19 @@ options =
           <> modelCommand "rulings" "The point's rulings, inherited ones included" (pure Rulings)
           <> modelCommand "links" "Each link label in use, with how many links use it" (pure Links)
           <> modelCommand "diff" "How two points differ" (Diff <$> positional "POINT" <*> positional "POINT")
-          <> modelCommand "graph" "The space as a Mermaid flowchart" (pure Graph)
+          <> modelCommand "graph" "The space as a Mermaid flowchart or a Graphviz digraph" (Graph <$> format)
       )
+
+format :: Parser Format
+format =
+  option
+    (eitherReader formatNamed)
+    (long "format" <> metavar "mermaid|dot" <> value Mermaid <> help "The output format, mermaid by default")
+
+formatNamed :: String -> Either String Format
+formatNamed "mermaid" = Right Mermaid
+formatNamed "dot" = Right Dot
+formatNamed f = Left ("unknown format " <> f <> ", expected mermaid or dot")
 
 pointNew :: Mod CommandFields Action
 pointNew =
