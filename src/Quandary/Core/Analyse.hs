@@ -4,12 +4,14 @@ module Quandary.Core.Analyse
   , Standing (..)
   , Moved (..)
   , Bounds (..)
+  , Implication (..)
   , Refusal (..)
   , analyse
   , standing
   , verdictAt
   , onlyOptionsMoved
   , bounds
+  , implications
   , topGrade
   , whyAll
   , edit
@@ -118,7 +120,7 @@ data Var
 -- only.
 bounds :: Monad m => Solver m -> Model -> Text -> Analysis -> [OptionId] -> m (Map OptionId Bounds)
 bounds (Solver solving) m name analysis targets = case analysis of
-  Fresh s | not (null m.space.grades) -> solving formula (each s)
+  Fresh s | not (null m.space.grades), not (null targets) -> solving formula (each s)
   _ -> pure Map.empty
   where
     each s query =
@@ -178,6 +180,28 @@ bounds (Solver solving) m name analysis targets = case analysis of
         go k = do
           r <- query.design (Set.unions [chosenRulings, Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)), Set.fromList [Refuse (Committed p) | p <- options, grade p < k]])
           maybe (go (k - 1)) (const (pure k)) r
+
+-- | A question some options raise, with the bounds of its possible
+-- options, or none when it is dormant.
+data Implication = Implication
+  { raising :: Raising
+  , values :: Maybe (Map OptionId Bounds)
+  }
+  deriving (Eq, Show)
+
+-- | Returns each question raised by the given options the point accepts,
+-- with the bounds of its possible options at the point.
+implications :: Monad m => Solver m -> Model -> Text -> Standing -> Set OptionId -> m [Implication]
+implications solver m name s os = do
+  bs <- bounds solver m name (Fresh s) (concatMap (possible . (.question)) (filter (not . dormant) rs))
+  pure [Implication r (valuesAt bs r) | r <- rs]
+  where
+    rs = raisedQuestions m.space (Set.filter (\o -> Set.member (Take o) (rulingsOf m.points name)) os)
+    dormant r = Map.lookup r.question.id s.states == Just Dormant
+    possible q = [o | o <- choices q, Map.lookup o s.verdicts == Just Possible]
+    valuesAt bs r
+      | dormant r = Nothing
+      | otherwise = Just (Map.restrictKeys bs (Set.fromList (choices r.question)))
 
 -- | Returns every minimal subset of the rulings that leaves no design
 -- holding the literal, smallest first.

@@ -6,9 +6,9 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Gen
-import Quandary.Core.Analyse (Bounds (..), analyse, bounds)
+import Quandary.Core.Analyse (Analysis (..), Bounds (..), Implication (..), Moved (..), QuestionState (..), Standing (..), analyse, bounds, implications, whatif)
 import Quandary.Core.Compile (compile)
-import Quandary.Core.Rulings (pointNamed)
+import Quandary.Core.Rulings (Edit (..), pointNamed)
 import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
@@ -58,13 +58,32 @@ properties =
     , testProperty "bounds are the best design taking each option" $
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
-            not (any (\o -> Set.member (Refuse o) p) [o | Take o <- Set.toList p]) ==>
+            consistent p ==>
               ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver -> do
                 a <- analyse solver (modelAt space p) "current"
                 found <- bounds solver (modelAt space p) "current" a (Set.toList (compile space).variables)
                 pure (found === bestDesigns space p)
+    , testProperty "whatif accept bounds each question the option raises at the point it reaches" $
+        forAll (genSpace >>= genGraded) $ \space ->
+          forAll (genPoint space) $ \p ->
+            forAll (elements (Set.toList (compile space).variables)) $ \o ->
+              let p' = Set.insert (Take o) (Set.delete (Refuse o) p)
+               in consistent p' ==>
+                    ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
+                      whatif solver (modelAt space p) "current" [Accept o Nothing] >>= \case
+                        Left e -> pure (counterexample (show e) False)
+                        Right (_, Moved {after = StaleAt _}) -> pure (property True)
+                        Right (m', Moved {after = Fresh s}) -> do
+                          found <- implications solver m' "current" s (Set.singleton o)
+                          pure $
+                            map (\i -> i.raising.question.id) found === [q.id | q <- Map.elems space.questions, any (elem o) q.raisedBy]
+                              .&&. conjoin [i.values === raisedBounds space p' s i.raising.question | i <- found]
     ]
   where
+    consistent p = not (any (\o -> Set.member (Refuse o) p) [o | Take o <- Set.toList p])
+    raisedBounds space p s q
+      | Map.lookup q.id s.states == Just Dormant = Nothing
+      | otherwise = Just (Map.restrictKeys (bestDesigns space p) (Set.fromList [c | c <- choices q, Map.lookup c s.verdicts == Just Possible]))
     consequencesOf space p = let f = compile space in bruteForceOn f (\q -> consequences q p)
     holds v (Take _) = v === Just Forced
     holds v (Refuse _) = v === Just Impossible

@@ -1,6 +1,7 @@
 module Cli (cli) where
 
 import Data.List (isInfixOf, isPrefixOf)
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Fixtures (withCopy)
@@ -203,6 +204,81 @@ cli =
         _ <- quandary dir ["exhaust", "sync/merge-conflicts", "--", "the driver or nothing"]
         (_, out, _) <- quandary dir ["show", "sync/how"]
         filter ("sync/git " `isInfixOf`) (lines out) @?= ["possible    sync/git        Git repo under the hood  value broken..hack"]
+    , testCase "show prints each question an option raises once, with its co-raisers" $ withHistory $ \dir -> do
+        (_, out, _) <- quandary dir ["show", "sync/how"]
+        drop 1 (dropWhile (not . ("defeated" `isPrefixOf`)) (lines out))
+          @?= [ "  raises conflict/shown: What the user sees on a conflict"
+              , "possible    sync/git        Git repo under the hood  value broken..clean"
+              , "  raises conflict/shown: What the user sees on a conflict"
+              , "  raises extra/history: What history keeps"
+              , "    with any of extra/a, extra/b"
+              , "  raises sync/merge-conflicts: Merge conflicts surface to non-technical users"
+              , "possible    sync/how.other  value broken..clean"
+              ]
+        (_, out', _) <- quandary dir ["show", "extra/pick"]
+        take 3 (dropWhile (/= "  graded clean: simple") (lines out')) @?= ["  graded clean: simple", "  raises extra/history: What history keeps", "    with sync/git"]
+    , testCase "show wraps co-raisers at 80 columns" $ withHistory $ \dir -> do
+        editHistory dir "[sync/git, extra/b]]" "[sync/git, extra/b], [sync/git, extra/c], [sync/git, extra/pick.other], [sync/git, store/sqlite]]"
+        (_, out, _) <- quandary dir ["show", "sync/how"]
+        filter ("    " `isPrefixOf`) (lines out)
+          @?= [ "    with any of extra/a, extra/b, extra/c, extra/pick.other, store/sqlite"
+              ]
+        editHistory dir "[sync/git, store/sqlite]]" "[sync/git, store/sqlite], [sync/git, conflict/three-way]]"
+        (_, out', _) <- quandary dir ["show", "sync/how"]
+        filter ("    " `isPrefixOf`) (lines out')
+          @?= [ "    with any of extra/a, extra/b, extra/c, extra/pick.other, store/sqlite,"
+              , "      conflict/three-way"
+              ]
+    , testCase "co-raisers needed together go in parentheses" $ withHistory $ \dir -> do
+        editHistory dir "[sync/git, extra/b]]" "[sync/git, extra/b, store/files]]"
+        (_, out, _) <- quandary dir ["show", "sync/how"]
+        assertBool out ("    with any of extra/a, (extra/b with store/files)" `elem` lines out)
+        (_, out', _) <- quandary dir ["show", "extra/pick"]
+        assertBool out' (["  raises extra/history: What history keeps", "    with (sync/git with store/files)"] `isInfixOf` lines out')
+        (_, out'', _) <- quandary dir ["whatif", "accept", "sync/git"]
+        assertBool out'' ("    with any of extra/a, (extra/b with store/files)" `elem` lines out'')
+    , testCase "whatif accept lists what the accepted options raise, with bounds at the new point" $ withHistory $ \dir -> do
+        r <- quandary dir ["whatif", "accept", "extra/b"]
+        r
+          @?= ( ExitSuccess
+              , unlines
+                  [ "extra/pick: open -> closed (b forced; a, c impossible)"
+                  , ""
+                  , "raises"
+                  , "  extra/history: What history keeps"
+                  , "    with sync/git"
+                  , "    all broken..costly, squash broken..hack"
+                  ]
+              , ""
+              )
+    , testCase "whatif accept lists raised questions live at the new point or not" $ withHistory $ \dir -> do
+        (_, out, _) <- quandary dir ["whatif", "accept", "sync/git", "conflict/diff", "defeat", "extra/b"]
+        dropWhile (/= "raises") (lines out)
+          @?= [ "raises"
+              , "  conflict/compare: What the merge screen compares"
+              , "    two-way, three-way"
+              , "  conflict/narrow: A phone screen is too narrow for two columns"
+              , "    phone-layout, other"
+              , "  conflict/shown: What the user sees on a conflict"
+              , "    taken: diff"
+              , "  conflict/when: When the user resolves"
+              , "    modal, inbox"
+              , "  extra/history: What history keeps"
+              , "    with any of extra/a, extra/b"
+              , "    all costly, squash hack"
+              , "  sync/merge-conflicts: Merge conflicts surface to non-technical users"
+              , "    driver, other"
+              ]
+        (_, out', _) <- quandary dir ["whatif", "accept", "sync/git", "defeat", "extra/a", "extra/b"]
+        dropWhile (/= "  extra/history: What history keeps [dormant]") (lines out')
+          @?= [ "  extra/history: What history keeps [dormant]"
+              , "    with any of extra/a, extra/b"
+              , "  sync/merge-conflicts: Merge conflicts surface to non-technical users"
+              , "    driver, other"
+              ]
+    , testCase "whatif accept into a stale point lists nothing raised" $ withCopy $ \dir -> do
+        (_, out, _) <- quandary dir ["whatif", "accept", "sync/crdt"]
+        assertBool out ("raises" `notElem` lines out)
     , testCase "ranking an impossible option says so" $ withCopy $ \dir -> do
         (code, out, _) <- quandary dir ["prefer", "sync/crdt", "3"]
         code @?= ExitSuccess
@@ -360,3 +436,37 @@ writeGraded dir = do
       , ""
       , "C."
       ]
+
+withHistory :: (FilePath -> IO a) -> IO a
+withHistory k = withCopy $ \dir -> do
+  writeGraded dir
+  writeHistory dir
+  k dir
+
+writeHistory :: FilePath -> IO ()
+writeHistory dir =
+  writeFile (dir </> "questions/extra/history.md") $
+    unlines
+      [ "---"
+      , "title: What history keeps"
+      , "pick: one"
+      , "raised-by: [[sync/git, extra/a], [sync/git, extra/b]]"
+      , "options:"
+      , "  all: {title: Every commit, assessment: {grade: costly}}"
+      , "  squash: {title: Squashed daily, assessment: {grade: hack}}"
+      , "---"
+      , "History."
+      , ""
+      , "## extra/all"
+      , ""
+      , "All."
+      , ""
+      , "## extra/squash"
+      , ""
+      , "Squash."
+      ]
+
+editHistory :: FilePath -> Text -> Text -> IO ()
+editHistory dir old new = Text.writeFile path . Text.replace old new =<< Text.readFile path
+  where
+    path = dir </> "questions/extra/history.md"

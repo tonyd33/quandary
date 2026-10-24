@@ -15,6 +15,7 @@ module Quandary.Core.Types
   , Ruling (..)
   , Formula (..)
   , Verdict (..)
+  , Raising (..)
   , choices
   , optionOf
   , opposite
@@ -25,13 +26,18 @@ module Quandary.Core.Types
   , idText
   , optionAt
   , questionOf
+  , raisedQuestions
   )
 where
 
-import Data.List.NonEmpty (NonEmpty)
+import Data.Containers.ListUtils (nubOrd)
+import Data.Foldable (toList)
+import Data.List.NonEmpty (NonEmpty, nonEmpty)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (mapMaybe)
 import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 
 newtype Id = Id Text
@@ -157,6 +163,27 @@ data Verdict
   | -- | No design takes it.
     Impossible
   deriving (Eq, Show)
+
+-- | A question some options raise.
+data Raising = Raising
+  { question :: Question
+  , with :: [NonEmpty OptionId]
+  -- ^ Each set of further options that raises it alongside them; empty
+  -- when they raise it alone.
+  }
+  deriving (Eq, Show)
+
+-- | Returns the questions some of the options raise.
+raisedQuestions :: Space -> Set OptionId -> [Raising]
+raisedQuestions space os = mapMaybe (raising os) (Map.elems space.questions)
+
+raising :: Set OptionId -> Question -> Maybe Raising
+raising os q
+  | null others = Nothing
+  | any null others = Just (Raising q [])
+  | otherwise = Just (Raising q (mapMaybe nonEmpty (nubOrd others)))
+  where
+    others = [filter (`Set.notMember` os) (toList g) | g <- q.raisedBy, any (`Set.member` os) g]
 
 -- | Returns the options a design decides for the question, its implicit
 -- other first.

@@ -9,7 +9,8 @@
 
 let
   hp = import ./nix/haskell.nix pkgs;
-  deps = hp.quandary.getCabalDeps;
+  cabalOnly = pkgs.writeTextDir "quandary.cabal" (builtins.readFile ./quandary.cabal);
+  deps = (hp.callCabal2nix "quandary" cabalOnly { }).getCabalDeps;
 in
 {
   # https://devenv.sh/packages/

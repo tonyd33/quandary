@@ -58,11 +58,14 @@ Devices edit offline and reconcile when they reconnect.
 
 impossible  sync/crdt       CRDT per note
 defeated    sync/lww        Last write wins per file  silently loses edits made offline
-  raises conflict/shown
+  raises conflict/shown: What the user sees on a conflict
 possible    sync/git        Git repo under the hood
-  raises conflict/shown, sync/merge-conflicts
+  raises conflict/shown: What the user sees on a conflict
+  raises sync/merge-conflicts: Merge conflicts surface to non-technical users
 possible    sync/how.other
 ```
+
+Question raised only with other options names them under it: `with any of a, b`.
 
 Ask why option out:
 
@@ -72,11 +75,17 @@ sync/crdt is impossible because of:
   accept store/files (current: must open in any editor)
 ```
 
-Try ruling without recording, then record:
+Try ruling without recording, then record. `whatif accept` also lists what accepted option commits to: each question it raises, with possible options and their bounds at point it would reach:
 
 ```
 $ quandary whatif accept sync/git
 sync/how: open -> closed (git forced)
+
+raises
+  conflict/shown: What the user sees on a conflict
+    copy, diff
+  sync/merge-conflicts: Merge conflicts surface to non-technical users
+    driver, other
 $ quandary accept sync/git history and offline merges
 accepted sync/git
   sync/how: open -> closed
@@ -290,9 +299,9 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 |---|---|
 | `check` | report every problem in space and points, every stale point; exit 1 if any, else print `ok` |
 | `status` | frontier in decision order, each question's possible options by preference, with bounds unless spanning every grade; then open questions with option taken; then open questions no taken option raises, with raisers; then closed, deferred, dormant questions; then every point: fresh or stale, proposed, whether it rules anything beyond point it extends |
-| `show QUESTION` | options with verdicts, rulings, grades, bounds, whether one dominated, questions each raises |
+| `show QUESTION` | options with verdicts, rulings, grades, bounds, whether one dominated; under each option, each question it raises, once, with title, and on line below, options raising it alongside: `with a`, `with any of a, (b with c)`; none when option raises it alone |
 | `why OPTION` | every set of rulings making `OPTION` impossible or forced |
-| `whatif VERB ID ... [VERB ID ...]` | changes if rulings applied, with every conflicting set of rulings if they leave point stale; each verb `accept`, `defeat` or `reopen` followed by ids, no reasons |
+| `whatif VERB ID ... [VERB ID ...]` | changes if rulings applied, with every conflicting set of rulings if they leave point stale; unless stale, then `raises`: every question accepted options raise, with title and co-raisers as in `show`, `[dormant]` when live in no design reaching new point, else options as in `status` at new point; each verb `accept`, `defeat` or `reopen` followed by ids, no reasons |
 | `accept OPTION... [--] [REASON]` | accept each; refuses, writing nothing, if any would leave point stale |
 | `defeat OPTION... [--] REASON` | defeat each; refuses, writing nothing, if any would leave point stale |
 | `exhaust QUESTION... [--] REASON` | defeat each `QUESTION.other`: listed options all there is; refuses, writing nothing, if any would leave point stale |

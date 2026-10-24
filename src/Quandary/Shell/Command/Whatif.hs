@@ -1,6 +1,8 @@
 module Quandary.Shell.Command.Whatif (run) where
 
 import Data.Maybe (isJust)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
@@ -21,7 +23,15 @@ run env args = case whatifEdits env.model.space args of
   Right es ->
     Analyse.whatif Cadical.cadical env.model env.point es >>= \case
       Left e -> failLines (Render.editError e)
-      Right (m', mv) -> ExitSuccess <$ Text.putStr (Text.unlines (Render.movedLines m' env.point mv))
+      Right (m', mv) -> do
+        raises <- maybe (pure []) (raisedLines m' env.point (accepted es)) (Analyse.standing mv.after)
+        ExitSuccess <$ Text.putStr (Text.unlines (Render.movedLines m' env.point mv ++ raises))
+
+raisedLines :: Model -> Text -> Set OptionId -> Analyse.Standing -> IO [Text]
+raisedLines m name os s = Render.implicationLines m name s <$> Analyse.implications Cadical.cadical m name s os
+
+accepted :: [Edit] -> Set OptionId
+accepted es = Set.fromList [o | Accept o _ <- es]
 
 whatifEdits :: Space -> [Text] -> Either Text [Edit]
 whatifEdits _ [] = Right []

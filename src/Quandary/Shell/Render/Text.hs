@@ -7,6 +7,7 @@ module Quandary.Shell.Render.Text
   , ruled
   , settled
   , movedLines
+  , implicationLines
   , Remark (..)
   , remark
   , pointError
@@ -23,7 +24,7 @@ where
 
 import Data.Foldable (toList)
 import Data.List (sortOn, transpose, (!?))
-import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
@@ -142,26 +143,12 @@ status m name a bs staleNames =
       , i <- block
       , Just q <- [Map.lookup i space.questions]
       ]
-    taken s q = [o | o <- choices q, Map.lookup o s.verdicts == Just Forced]
     raised s q = null q.raisedBy || any (all (\o -> Map.lookup o s.verdicts == Just Forced)) q.raisedBy
     raisers s q =
       Text.intercalate
         ", "
         [raiserText g | g <- q.raisedBy, all (\o -> Map.lookup o s.verdicts /= Just Impossible) g]
-    frontierOptions s q =
-      Text.intercalate "; " $
-        [Text.intercalate ", " (map (\o -> Text.unwords (filter (not . Text.null) [key o, rankText ranks o, value o])) open) | not (null open)]
-          ++ ["taken: " <> Text.intercalate ", " (map key os) | let os = taken s q, not (null os)]
-      where
-        possible = [o | o <- byPreference m name q, Map.lookup o s.verdicts == Just Possible]
-        open = case filter (/= Other q.id) possible of
-          [_] -> possible
-          [] -> possible
-          listed' -> listed'
-    ranks = preferenceAt m.points name
-    value o = case Map.lookup o bs of
-      Just b | b.lo > 0 || b.hi < topGrade space -> boundsText space b
-      _ -> ""
+    frontierOptions s q = Text.unwords (optionChunks m name bs s q)
     pointNote ss p =
       Text.intercalate ", " $
         [if Set.member p ss then "stale" else "fresh"]
@@ -172,6 +159,49 @@ status m name a bs staleNames =
               | same p e -> ["extends " <> e <> " and rules nothing else"]
               | otherwise -> ["extends " <> e]
     same p e = rulingsOf m.points p == rulingsOf m.points e && deferredAt m.points p == deferredAt m.points e
+
+-- | Returns the question's possible options by preference with their ranks
+-- and bounds, then its taken ones, punctuated to be joined by spaces.
+optionChunks :: Model -> Text -> Map OptionId Bounds -> Standing -> Question -> [Text]
+optionChunks m name bs s q = case (map (optionEntry m.space ranks bs) (shownPossible m name s q), map key (taken s q)) of
+  (os, []) -> commas os
+  ([], ts) -> takenChunks ts
+  (os, ts) -> closedWith ";" (commas os) ++ takenChunks ts
+  where
+    ranks = preferenceAt m.points name
+
+-- | Returns the option's key, rank and bounds, the bounds only when they
+-- leave out some grade.
+optionEntry :: Space -> Map OptionId Int -> Map OptionId Bounds -> OptionId -> Text
+optionEntry space ranks bs o = Text.unwords (filter (not . Text.null) [key o, rankText ranks o, value])
+  where
+    value = case Map.lookup o bs of
+      Just b | b.lo > 0 || b.hi < topGrade space -> boundsText space b
+      _ -> ""
+
+-- | Returns the question's possible options by preference, its implicit
+-- other only when at most one listed option is possible.
+shownPossible :: Model -> Text -> Standing -> Question -> [OptionId]
+shownPossible m name s q = case filter (/= Other q.id) possible of
+  several@(_ : _ : _) -> several
+  _ -> possible
+  where
+    possible = [o | o <- byPreference m name q, Map.lookup o s.verdicts == Just Possible]
+
+-- | Returns the question's options every design reaching the point takes.
+taken :: Standing -> Question -> [OptionId]
+taken s q = [o | o <- choices q, Map.lookup o s.verdicts == Just Forced]
+
+takenChunks :: [Text] -> [Text]
+takenChunks ts = case commas ts of
+  t : rest -> ("taken: " <> t) : rest
+  [] -> []
+
+-- | Append the text to the last chunk.
+closedWith :: Text -> [Text] -> [Text]
+closedWith _ [] = []
+closedWith end [x] = [x <> end]
+closedWith end (x : xs) = x : closedWith end xs
 
 -- | Returns the bounds by grade name, one name when they meet.
 boundsText :: Space -> Bounds -> Text
@@ -209,6 +239,49 @@ wrapped = map (("  " <>) . Text.intercalate ", ") . go
     fill n acc (y : ys)
       | n + 2 + Text.length y > 78 = (reverse acc, y : ys)
       | otherwise = fill (n + 2 + Text.length y) (y : acc) ys
+
+-- | Returns the questions the accepted options raise, each with its
+-- co-raisers and the bounds of its possible options, then its taken ones.
+implicationLines :: Model -> Text -> Standing -> [Implication] -> [Text]
+implicationLines _ _ _ [] = []
+implicationLines m name s is = "" : "raises" : concatMap implication is
+  where
+    implication i = case i.values of
+      Nothing -> ("  " <> raisedTitle i.raising <> " [dormant]") : coRaiserLines i.raising
+      Just bs -> ("  " <> raisedTitle i.raising) : coRaiserLines i.raising ++ filled "    " "      " (optionChunks m name bs s i.raising.question)
+
+raisedTitle :: Raising -> Text
+raisedTitle r = idText r.question.id <> ": " <> r.question.title
+
+-- | Returns the lines naming the options that raise the question alongside,
+-- none when the options raise it alone.
+coRaiserLines :: Raising -> [Text]
+coRaiserLines r = case r.with of
+  [] -> []
+  [g] -> ["    with " <> coRaiser g]
+  gs -> filled "    with any of " "      " (commas (map coRaiser gs))
+
+coRaiser :: NonEmpty OptionId -> Text
+coRaiser (o :| []) = optionName o
+coRaiser g = "(" <> raiserText g <> ")"
+
+-- | Returns the chunks space-separated, breaking before any chunk that
+-- would pass column 80, the first line opening with the first prefix and
+-- the rest with the second.
+filled :: Text -> Text -> [Text] -> [Text]
+filled _ _ [] = []
+filled first next (c : cs) = go (first <> c) cs
+  where
+    go line [] = [line]
+    go line (d : ds)
+      | Text.length line + 1 + Text.length d > 80 = line : go (next <> d) ds
+      | otherwise = go (line <> " " <> d) ds
+
+-- | Returns the items with a comma after each but the last.
+commas :: [Text] -> [Text]
+commas [] = []
+commas [x] = [x]
+commas (x : xs) = (x <> ",") : commas xs
 
 -- | Returns an option's key: its id without the directory, `other` for an
 -- implicit other.
@@ -290,16 +363,7 @@ showQuestion m name a bs q =
         | b.hi < best.lo ->
             ["  dominated: at best " <> gradeName m.space b.hi <> ", below " <> optionName p <> " at worst " <> gradeName m.space best.lo]
       _ -> []
-    raises o = ["  raises " <> Text.intercalate ", " rs | let rs = raisedBy o, not (null rs)]
-    raisedBy o =
-      [ idText r.id <> with
-      | r <- Map.elems m.space.questions
-      , g <- r.raisedBy
-      , o `elem` g
-      , let with = case filter (/= o) (toList g) of
-              [] -> ""
-              others -> " (with " <> Text.intercalate ", " (map optionName others) <> ")"
-      ]
+    raises o = concat [("  raises " <> raisedTitle r) : coRaiserLines r | r <- raisedQuestions m.space (Set.singleton o)]
 
 why :: Model -> Text -> OptionId -> Verdict -> [Set Literal] -> Text
 why m name o v cores = case v of
