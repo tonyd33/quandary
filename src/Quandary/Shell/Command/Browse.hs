@@ -37,11 +37,11 @@ newtype Changed = Changed Revision
 run :: FilePath -> Text -> IO ExitCode
 run dir point = Browse.withLive dir $ \live -> do
   chan <- newBChan 8
-  d <- Browse.page live (StatusAt point)
+  (r, d) <- arrive live True (StatusAt point)
   let start =
         Tui
           { live
-          , route = StatusAt point
+          , route = r
           , back = []
           , drawn = d
           , focus = Focus {pane = Questions, option = Nothing, expanded = Set.empty}
@@ -237,18 +237,28 @@ goBack =
 goTo :: [Route] -> Route -> EventM Name Tui ()
 goTo back r = do
   t <- get
-  d <- liftIO (Browse.page t.live r)
-  put t {route = r, back, drawn = d, focus = t.focus {option = Nothing, expanded = Set.empty}}
+  (r', d) <- liftIO (arrive t.live t.folded r)
+  put t {route = r', back, drawn = d, focus = t.focus {option = Nothing, expanded = Set.empty}}
+
+-- | Returns the route shown for the route and its page: a point's first
+-- listed question in place of its status.
+arrive :: Live -> Bool -> Route -> IO (Route, Drawn)
+arrive live folded r = do
+  d <- Browse.page live r
+  case Browse.landing folded d of
+    Just r' -> (,) r' <$> Browse.page live r'
+    Nothing -> pure (r, d)
 
 -- | Redraw the route's page, keeping the selected option and the expanded
 -- branches that still show.
 refresh :: EventM Name Tui ()
 refresh = do
   t <- get
-  d <- liftIO (Browse.page t.live t.route)
+  (r, d) <- liftIO (arrive t.live t.folded t.route)
   let kept = maybe Set.empty (Set.fromList . Browse.visibleOptions t.focus.expanded) (Browse.pageQuestion d)
   put
     t
-      { drawn = d
+      { route = r
+      , drawn = d
       , focus = t.focus {option = mfilter (`Set.member` kept) t.focus.option, expanded = Set.intersection t.focus.expanded kept}
       }

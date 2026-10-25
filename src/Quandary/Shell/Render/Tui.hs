@@ -6,7 +6,7 @@ module Quandary.Shell.Render.Tui
 where
 
 import Brick
-import Brick.Widgets.Border (borderWithLabel, hBorder)
+import Brick.Widgets.Border (borderWithLabel)
 import Brick.Widgets.Center (centerLayer)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -15,6 +15,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Graphics.Vty qualified as Vty
+import Lens.Micro ((^.))
 import Quandary.Core.Analyse
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
@@ -57,11 +58,11 @@ draw :: Tui -> [Widget Name]
 draw t = maybe [] (\o -> [overlayWidget t o]) t.overlay ++ [vBox [header t, content, footer]]
   where
     content = case Browse.pageStanding t.drawn of
-      Just (m, s) -> hBox [hLimit 32 (questionList t m s), pageWidget t.focus t.drawn]
+      Just (m, s) -> hBox [questionList t m s, pageWidget t.focus t.drawn]
       Nothing -> pageWidget t.focus t.drawn
 
 header :: Tui -> Widget Name
-header t = txt (" quandary  " <> Browse.routeTitle t.route) <+> fill ' ' <+> txt (counts <> " ")
+header t = hBox [txt (" quandary  " <> Browse.routeTitle t.route), padLeft Max (txt (counts <> " "))]
   where
     counts = maybe "" (summary . snd) (Browse.pageStanding t.drawn)
     summary s = Render.tshow (count isOpen s) <> " open, " <> Render.tshow (count (== Dormant) s) <> " dormant"
@@ -71,24 +72,44 @@ footer :: Widget Name
 footer =
   withAttr
     dimAttr
-    (txt " j/k move  tab pane  enter open  space fold  u raiser  z closed  backspace back  p point  w whatif  q quit")
+    (txtWrap " j/k move  tab pane  enter open  space fold  u raiser  z closed  backspace back  p point  w whatif  q quit")
 
+-- | Returns the list as wide as its widest line, at most a third of the
+-- screen.
 questionList :: Tui -> Model -> Standing -> Widget Name
 questionList t m s =
-  borderWithLabel (paneLabel t Questions "Questions") . viewport QuestionList Vertical . vBox $
-    concatMap listing (Browse.listedQuestions t.folded m (Browse.routePoint t.route) s shown)
+  hLimitPercent 33 . hLimit (widest + 2) . paneFrame t.focus Questions "Questions" . viewport QuestionList Vertical . vBox $
+    map snd ls
   where
     shown = (.question.id) <$> Browse.pageQuestion t.drawn
-    listing (Unfolded k ids) = withAttr dimAttr (txt (Render.groupTitle k)) : map entry ids
-    listing (Folded k n) = [withAttr dimAttr (txt (Render.groupTitle k <> " (" <> Render.tshow n <> ")"))]
+    ls = concatMap listing (Browse.listedQuestions t.folded m (Browse.routePoint t.route) s shown)
+    widest = maximum (Text.length (padded "Questions") + 2 : map (Text.length . fst) ls)
+    listing (Unfolded k ids) = dim (Render.groupTitle k) : map entry ids
+    listing (Folded k n) = [dim (Render.groupTitle k <> " (" <> Render.tshow n <> ")")]
+    dim l = (l, withAttr dimAttr (clipped l))
     entry i
-      | Just i == shown = visible (withAttr selectedAttr (txt ("> " <> idText i)))
-      | otherwise = txt ("  " <> idText i)
+      | Just i == shown = selected ("> " <> idText i)
+      | otherwise = let l = "  " <> idText i in (l, clipped l)
+    selected l = (l, visible (withAttr selectedAttr (padRight Max (clipped l))))
 
-paneLabel :: Tui -> Pane -> Text -> Widget Name
-paneLabel t p label
-  | t.focus.pane == p = withAttr focusedAttr (txt (padded label))
-  | otherwise = txt (padded label)
+-- | Returns the text cut to the width available, an ellipsis marking the
+-- cut.
+clipped :: Text -> Widget n
+clipped l = Widget Fixed Fixed $ do
+  w <- (^. availWidthL) <$> getContext
+  render . txt $
+    if Text.length l > w
+      then Text.take (w - 1) l <> "\x2026"
+      else l
+
+paneFrame :: Focus -> Pane -> Text -> Widget Name -> Widget Name
+paneFrame f p = framedIf (f.pane == p)
+
+-- | Returns the widget boxed under the label, the label bold when the
+-- condition holds.
+framedIf :: Bool -> Text -> Widget Name -> Widget Name
+framedIf True label = borderWithLabel (withAttr focusedAttr (txt (padded label)))
+framedIf False label = framed label
 
 padded :: Text -> Text
 padded label = " " <> label <> " "
@@ -97,13 +118,15 @@ padded label = " " <> label <> " "
 -- marked.
 pageWidget :: Focus -> Drawn -> Widget Name
 pageWidget f d = case d.shown of
-  Problems ps -> framed "the space has problems" (padRight Max (vBox (map (txtWrap . Render.problem "") ps)))
+  Problems ps -> framed "the space has problems" (scrolled BodyView (padLeftRight 1 (wrappedLines (map (Render.problem "") ps))))
   Shown m pg -> case pg of
-    StatusPage p a bs ss -> framed ("point " <> p) (scrolled BodyView (statusWidget m p a bs ss))
+    StatusPage p a bs ss -> body ("point " <> p) BodyView (statusWidget m p a bs ss)
     QuestionPage v -> questionWidget f m.space v
-    PointsPage ps -> framed "points" (padRight Max (pointsWidget ps))
-    WhatifPage p _ r -> framed ("whatif at " <> p) (scrolled WhatifView (txt (either id Text.unlines (Render.whatifResult p r))))
-    NotFound t -> framed "not found" (padRight Max (txt t))
+    PointsPage ps -> body "points" BodyView (pointsWidget ps)
+    WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
+    NotFound t -> framed "not found" (padRight Max (padLeftRight 1 (txtWrap t)))
+  where
+    body label n = framedIf (f.pane /= Questions) label . scrolled n . padLeftRight 1
 
 framed :: Text -> Widget Name -> Widget Name
 framed label = borderWithLabel (txt (padded label))
@@ -111,37 +134,76 @@ framed label = borderWithLabel (txt (padded label))
 scrolled :: Name -> Widget Name -> Widget Name
 scrolled n = viewport n Vertical . padRight Max
 
-statusWidget :: Model -> Text -> Analysis -> Map OptionId Bounds -> Set Text -> Widget Name
-statusWidget m p a bs ss = vBox $ case a of
-  StaleAt cores -> map txt (Render.staleLines m p cores)
-  Fresh s ->
-    concat
-      [ withAttr dimAttr (txt (Render.groupTitle g.kind)) : map entry g.entries ++ [txt " "]
-      | g <- View.statusGroups m p bs s
-      , not (null g.entries)
-      ]
-      ++ [withAttr dimAttr (txt "points"), pointsWidget (View.pointViews m ss)]
+-- | Returns the lines wrapped, each continuation under the line's first
+-- word.
+wrappedLines :: [Text] -> Widget n
+wrappedLines = vBox . map line . concatMap Text.lines
   where
-    entry e = txtWrap ("  " <> idText e.question.id <> maybe "" ("  " <>) (Render.entryDetail m.space e.detail))
+    line l = case Text.span (== ' ') l of
+      (_, "") -> txt " "
+      (lead, rest) -> padLeft (Pad (Text.length lead)) (txtWrap rest)
+
+statusWidget :: Model -> Text -> Analysis -> Map OptionId Bounds -> Set Text -> Widget Name
+statusWidget m p a bs ss = case a of
+  StaleAt cores -> wrappedLines (Render.staleLines m p cores)
+  Fresh s ->
+    vBox $
+      concat
+        [ [withAttr dimAttr (txt (Render.groupTitle g.kind)), detailed (map entry g.entries), txt " "]
+        | g <- View.statusGroups m p bs s
+        , not (null g.entries)
+        ]
+        ++ [withAttr dimAttr (txt "points"), pointsWidget (View.pointViews m ss)]
+  where
+    entry e = (idText e.question.id, Render.entryDetail m.space e.detail)
+
+-- | Returns each name with its detail beside it, the details in one column
+-- wrapping under themselves, or under the name when the column would be
+-- narrower than 30.
+detailed :: [(Text, Maybe Text)] -> Widget n
+detailed rows = Widget Greedy Fixed $ do
+  w <- (^. availWidthL) <$> getContext
+  let column = 4 + maximum (0 : map (Text.length . fst) rows)
+      row (n, Nothing) = txt ("  " <> n)
+      row (n, Just d)
+        | w - column >= 30 = txt (Text.justifyLeft column ' ' ("  " <> n)) <+> txtWrap d
+        | otherwise = vBox [txt ("  " <> n), padLeft (Pad 6) (txtWrap d)]
+  render (vBox (map row rows))
 
 pointsWidget :: [PointView] -> Widget Name
-pointsWidget ps = vBox [txt ("  " <> pv.point.name <> "  " <> Render.pointNote pv) | pv <- ps]
+pointsWidget ps = detailed [(pv.point.name, Just (Render.pointNote pv)) | pv <- ps]
 
 questionWidget :: Focus -> Space -> QuestionView -> Widget Name
 questionWidget f space v =
   vBox
-    [ framed (Render.questionTitle v.analysis v.question) . viewport OptionList Vertical . vBox $
-        txt (Render.questionShape v.question)
-          : txt " "
-          : concat (zipWith optionEntry v.rows (Render.optionLines space v.point v.rows))
-    , hBorder
-    , scrolled BodyView (readingBody space f.option v.question)
+    [ paneFrame f Options (Render.questionTitle v.analysis v.question)
+        . fitted OptionList
+        . padRight Max
+        . padLeftRight 1
+        . vBox
+        $ txtWrap (Render.questionShape v.question) : txt " " : concatMap optionEntry v.rows
+    , paneFrame f Reading label (scrolled BodyView (padLeftRight 1 reading))
     ]
   where
-    optionEntry r line =
-      highlighted (f.option == Just r.option) (txt line)
-        : map (padLeft (Pad 2) . txt) (Render.rowNotes space r)
-        ++ [padLeft (Pad 2) (objectionsWidget f r.option r.objections) | not (null r.objections)]
+    (label, reading) = readingBody space f.option v.question
+    keyWidth = 2 + maximum (0 : map (Text.length . Render.key . (.option)) v.rows)
+    optionEntry r =
+      highlighted
+        (f.option == Just r.option)
+        ( txt (Text.justifyLeft 12 ' ' (Render.rowMark r) <> Text.justifyLeft keyWidth ' ' (Render.key r.option))
+            <+> txtWrap (nonEmpty (Render.rowDetail space v.point r))
+        )
+        : map (padLeft (Pad 12) . txtWrap) (Render.rowNotes space r)
+        ++ [padLeft (Pad 12) (objectionsWidget f r.option r.objections) | not (null r.objections)]
+    nonEmpty "" = " "
+    nonEmpty d = d
+
+-- | Returns the widget in a viewport as tall as its content, at most half
+-- the height available.
+fitted :: Name -> Widget Name -> Widget Name
+fitted n w = Widget Greedy Fixed $ do
+  measured <- render (vLimitPercent 50 w)
+  render (vLimit (Vty.imageHeight (image measured)) (viewport n Vertical w))
 
 -- | Returns the raised questions in full when the option is expanded, else
 -- their ids.
@@ -149,14 +211,17 @@ objectionsWidget :: Focus -> OptionId -> [Objection] -> Widget Name
 objectionsWidget f o obs
   | Set.member o f.expanded = objectionTree f obs
   | otherwise =
-      withAttr dimAttr (txt ("raises " <> Text.intercalate ", " [idText ob.raising.question.id | ob <- obs] <> "  (space)"))
+      withAttr
+        dimAttr
+        (txtWrap ("raises " <> Text.intercalate ", " [idText ob.raising.question.id | ob <- obs] <> "  (space)"))
 
--- | Returns the selected listed option's description, else the question's.
-readingBody :: Space -> Maybe OptionId -> Question -> Widget Name
+-- | Returns the label and text of the selected listed option's
+-- description, else of the question's.
+readingBody :: Space -> Maybe OptionId -> Question -> (Text, Widget Name)
 readingBody space (Just (Listed i)) _
   | Just (_, o) <- optionAt space i =
-      vBox [withAttr headingAttr (txtWrap (idText o.id <> ": " <> o.title)), txt " ", markdown o.description]
-readingBody _ _ q = markdown q.description
+      (idText o.id, vBox [withAttr headingAttr (txtWrap o.title), txt " ", markdown o.description])
+readingBody _ _ q = ("description", markdown q.description)
 
 -- | Returns the widget selected and scrolled into view when the condition
 -- holds.
@@ -171,7 +236,7 @@ objectionTree f = vBox . map objection
   where
     objection ob =
       vBox $
-        txt ("raises " <> Render.raisedTitle ob.raising <> " [" <> Render.stateText ob.state <> "]")
+        txtWrap ("raises " <> Render.raisedTitle ob.raising <> " [" <> Render.stateText ob.state <> "]")
           : [padLeft (Pad 2) (txtWrap t) | Just t <- [Render.coRaiserText ob.raising]]
           ++ concatMap entry ob.options
     entry c =
@@ -179,14 +244,17 @@ objectionTree f = vBox . map objection
         (Pad 2)
         ( highlighted
             (f.option == Just c.option)
-            (txt (Text.justifyLeft 12 ' ' (Render.verdictText c.verdict) <> optionName c.option))
+            (padRight Max (txt (Text.justifyLeft 12 ' ' (Render.verdictText c.verdict) <> optionName c.option)))
         )
         : [padLeft (Pad 4) (objectionTree f c.objections) | Set.member c.option f.expanded, not (null c.objections)]
 
 overlayWidget :: Tui -> Overlay -> Widget Name
 overlayWidget t (PointPicker i) =
-  centerLayer . framed "point" . hLimit 40 . vLimit 20 . viewport PointList Vertical . vBox $
-    [highlighted (n == i) (txt (padded name)) | (n, name) <- zip [0 ..] (Browse.pointNames t.drawn)]
+  centerLayer . framed "point" . hLimit width . vLimit (min 20 (length names)) . viewport PointList Vertical . vBox $
+    [highlighted (n == i) (padRight Max (txt (padded name))) | (n, name) <- zip [0 ..] names]
+  where
+    names = Browse.pointNames t.drawn
+    width = min 60 (max 20 (2 + maximum (map Text.length names)))
 overlayWidget t (WhatifPicker o) =
   centerLayer . framed "whatif" $
     txt

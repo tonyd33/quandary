@@ -337,7 +337,7 @@ Order: question comes after questions of its raisers. Of questions that may come
 - not found: unknown point, question or whatif id.
 - whatif: what `whatif` prints for the suppositions.
 
-`browse` lists point's questions on the left, grouped as in `status`, closed and deferred folded to a count unless one is shown; selected question on the right as in `show`, selected option's body, or question's description, below. Keys:
+`browse` opens point's first listed question, and its status page only when it lists none: stale, or no questions. It lists point's questions on the left, grouped as in `status`, closed and deferred folded to a count unless one is shown; selected question on the right as in `show` but options by key, at most half the height, scrolling beyond; selected option's body, or question's description, below. Question list as wide as its longest id, at most a third of the width, cutting longer ids with `…`. Keys:
 
 | key | does |
 |---|---|

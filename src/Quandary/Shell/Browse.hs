@@ -22,6 +22,7 @@ module Quandary.Shell.Browse
   , pageRow
   , listedQuestions
   , listedIds
+  , landing
   , visibleOptions
   , reopenable
   , pointNames
@@ -36,7 +37,7 @@ import Control.Monad (forM_, void, when)
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -331,6 +332,15 @@ foldable RaisedIfTaken = False
 foldable ClosedGroup = True
 foldable DeferredGroup = True
 foldable DormantGroup = False
+
+-- | Returns the route to the first question a fresh status page lists, in
+-- place of the page.
+landing :: Bool -> Drawn -> Maybe Route
+landing folded d = case d.shown of
+  Shown m (StatusPage p a _ _) -> do
+    s <- standing a
+    QuestionAt p <$> listToMaybe (concatMap listedIds (listedQuestions folded m p s Nothing))
+  _ -> Nothing
 
 -- | Returns the question's options in the order drawn, each expanded
 -- option followed by the options of the questions it raises.

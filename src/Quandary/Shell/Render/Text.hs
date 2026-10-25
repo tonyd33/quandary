@@ -32,6 +32,7 @@ module Quandary.Shell.Render.Text
   , entryDetail
   , pointNote
   , optionLines
+  , key
   )
 where
 

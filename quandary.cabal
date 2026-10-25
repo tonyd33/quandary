@@ -96,6 +96,7 @@ library
     , http-types
     , libyaml
     , lucid2
+    , microlens
     , optparse-applicative
     , stm
     , text

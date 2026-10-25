@@ -101,6 +101,16 @@ pages =
       pageAt (WhatifAt "current" [(ReopenVerb, "sync/how")]) >>= \case
         WhatifPage "current" _ (Left e) -> e @?= NotDeferred (Id "sync/how")
         _ -> assertFailure "not a refused whatif"
+  , testCase "a fresh point lands on the first question it lists" $
+      (landing True <$> drawnAt (StatusAt "current")) >>= (@?= Just (QuestionAt "current" (Id "sync/how")))
+  , testCase "a question page lands nowhere" $
+      (landing True <$> drawnAt (QuestionAt "current" (Id "sync/how"))) >>= (@?= Nothing)
+  , testCase "a stale point lands nowhere" $ withCopy $ \dir -> do
+      let file = dir </> "points/current.md"
+      TextIO.readFile file
+        >>= TextIO.writeFile file . Text.replace "accept:\n" "accept:\n  sync/crdt: {title: CRDT per note}\n"
+      d <- withLive dir (`page` StatusAt "current")
+      landing True d @?= Nothing
   , testCase "an unknown point is not found" $
       pageAt (StatusAt "typo") >>= \case
         NotFound t -> t @?= "unknown point typo"
