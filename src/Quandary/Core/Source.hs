@@ -13,6 +13,7 @@ module Quandary.Core.Source
   , NoteSource (..)
   , PointSource (..)
   , RulingSource (..)
+  , GradeSource (..)
   , Body (..)
   , Section (..)
   , Problem (..)
@@ -54,7 +55,14 @@ data Sources = Sources
   deriving (Eq, Show)
 
 data ConfigSource = ConfigSource
-  { grades :: Maybe (Located [Located Text])
+  { grades :: Maybe (Located [GradeSource])
+  }
+  deriving (Eq, Show)
+
+data GradeSource = GradeSource
+  { at :: Loc
+  , name :: Maybe (Located Text)
+  , desc :: Maybe (Located Text)
   }
   deriving (Eq, Show)
 
@@ -190,6 +198,7 @@ data Issue
   | TitleOnOther OptionId
   | BadRank Text
   | EmptyReason
+  | EmptyDesc
   | BadProposed Text
   | BadUnverified Text
   | -- | A grade name that is not letters, digits, `-` and `_`.
@@ -212,4 +221,5 @@ data Field
   | ReasonField
   | GradeField
   | GradesField
+  | NameField
   deriving (Eq, Show)

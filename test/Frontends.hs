@@ -185,6 +185,28 @@ pages =
           ]
             @?= [("conflict/copy", Nothing), ("conflict/diff", Just 7), ("conflict/silent", Nothing), ("conflict/shown.other", Nothing)]
         _ -> assertFailure "not a question page"
+  , testCase "a grade's desc shows on hover over its name" $ withCopy $ \dir -> do
+      writeFile (dir </> "quandary.yaml") "grades:\n  - {name: broken, desc: does not work}\n  - clean\n"
+      createDirectoryIfMissing True (dir </> "questions/extra")
+      writeFile (dir </> "questions/extra/pick.md") $
+        unlines
+          [ "---"
+          , "title: Pick"
+          , "pick: one"
+          , "options:"
+          , "  a: {title: A, assessment: {grade: broken}}"
+          , "---"
+          , "Pick."
+          , ""
+          , "## extra/a"
+          , ""
+          , "A."
+          ]
+      d <- withLive dir (`page` QuestionAt "current" (Id "extra/pick"))
+      let rendered = LazyText.toStrict (renderText (document (QuestionAt "current" (Id "extra/pick")) d))
+      assertBool
+        (Text.unpack rendered)
+        ("<span class=\"grade\" data-help=\"does not work\">broken</span>" `Text.isInfixOf` rendered)
   , testCase "a question's id is no option" $
       pageAt (OptionAt "current" "sync/how") >>= \case
         NotFound t -> t @?= "unknown option sync/how"

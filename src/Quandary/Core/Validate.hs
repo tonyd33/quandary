@@ -7,11 +7,11 @@ where
 
 import Control.Monad (forM, forM_, join, unless, when)
 import Data.Char (isAsciiLower, isDigit)
-import Data.List (sortOn)
+import Data.List (find, sortOn)
 import Data.List.NonEmpty (nonEmpty)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, isJust)
+import Data.Maybe (catMaybes, isJust, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -55,6 +55,7 @@ checkSources :: Sources -> Check Model
 checkSources sources = do
   checkIds sources
   grades <- checkGrades sources.config
+  let names = namesOf sources grades
   questions <- mapM (checkQuestion names) sources.questions
   checkForbidsDistinct sources.questions
   notes <- mapM (checkNote names) sources.notes
@@ -66,20 +67,17 @@ checkSources sources = do
           }
   points <- checkPoints names space sources.points
   pure Model {space, points}
-  where
-    names = namesOf sources
 
 -- | What references resolve against.
 data Names = Names
   { options :: Map Text OptionId
   , questions :: Map Text Id
   , targets :: Map Text Id
-  , grades :: [Text]
-  -- ^ As declared, valid or not.
+  , grades :: [Grade]
   }
 
-namesOf :: Sources -> Names
-namesOf sources =
+namesOf :: Sources -> [Grade] -> Names
+namesOf sources grades =
   Names
     { options = Map.fromList (listed ++ others)
     , questions = Map.fromList [(q.id.value, Id q.id.value) | q <- sources.questions]
@@ -89,7 +87,7 @@ namesOf sources =
               ++ [(q.id.value, Id q.id.value) | q <- sources.questions]
               ++ [(n.id.value, Id n.id.value) | n <- sources.notes]
           )
-    , grades = maybe [] (map (.value) . (.value)) sources.config.grades
+    , grades
     }
   where
     listed = [(o, Listed (Id o)) | q <- sources.questions, opt <- q.options, let o = optionIdOf q opt]
@@ -123,14 +121,27 @@ checkId l = unless (validId l.value) (report l.at (BadId l.value))
 checkSegment :: Located Text -> Check ()
 checkSegment l = unless (validSegment l.value) (report l.at (BadId l.value))
 
-checkGrades :: ConfigSource -> Check [Text]
+checkGrades :: ConfigSource -> Check [Grade]
 checkGrades c = case c.grades of
   Nothing -> pure []
   Just (Located l []) -> [] <$ report l (EmptyList GradesField)
   Just (Located _ gs) -> do
-    forM_ gs $ \g -> unless (validSegment g.value) (report g.at (BadGrade g.value))
-    forM_ (repeats (.value) gs) $ \(_, g) -> report g.at (DuplicateGrade g.value)
-    pure (map (.value) gs)
+    forM_ (repeats (.value) (mapMaybe (.name) gs)) $ \(_, n) -> report n.at (DuplicateGrade n.value)
+    catMaybes <$> mapM checkGrade gs
+
+checkGrade :: GradeSource -> Check (Maybe Grade)
+checkGrade g = case g.name of
+  Nothing -> Nothing <$ report g.at (Missing NameField)
+  Just n -> do
+    unless (validSegment n.value) (report n.at (BadGrade n.value))
+    desc <- join <$> traverse checkDesc g.desc
+    pure (Just Grade {name = n.value, desc})
+
+-- | Returns the description, or Nothing after reporting a blank one.
+checkDesc :: Located Text -> Check (Maybe Text)
+checkDesc t
+  | Text.null (Text.strip t.value) = Nothing <$ report t.at EmptyDesc
+  | otherwise = pure (Just (Text.strip t.value))
 
 checkQuestion :: Names -> QuestionSource -> Check Question
 checkQuestion names q = do
@@ -198,12 +209,19 @@ checkOption names q o = do
 checkAssessment :: Names -> AssessmentSource -> Check Assessment
 checkAssessment names a = do
   grade <- case a.grade of
-    Nothing -> "" <$ report a.at (Missing GradeField)
-    Just g
-      | null names.grades -> g.value <$ report g.at NoGrades
-      | otherwise -> g.value <$ unless (g.value `elem` names.grades) (report g.at (UnknownGrade g.value))
+    Nothing -> Grade "" Nothing <$ report a.at (Missing GradeField)
+    Just g -> declaredGrade names g
   unverified <- flag BadUnverified a.unverified
   pure Assessment {grade, unverified, why = (.value) <$> a.why}
+
+-- | Returns the declared grade with the name, or a placeholder after
+-- reporting it undeclared.
+declaredGrade :: Names -> Located Text -> Check Grade
+declaredGrade names g = case find ((== g.value) . (.name)) names.grades of
+  Just declared -> pure declared
+  Nothing
+    | null names.grades -> Grade g.value Nothing <$ report g.at NoGrades
+    | otherwise -> Grade g.value Nothing <$ report g.at (UnknownGrade g.value)
 
 checkForbid :: Names -> ForbidSource -> Check Forbid
 checkForbid names f = do

@@ -10,6 +10,7 @@
 
 ### New Features
 
+- Added a `desc` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name` and `desc`, and `serve` shows a grade's `desc` on hover over its name. A bare name still works.
 - Added `init`, which creates a space: its directory, `questions/`, `notes/`, `points/`, a `quandary.yaml` showing grades in a comment, and `.quandary/.gitignore`. It creates only what is missing and overwrites nothing.
 - `graph --format dot` prints the space as a Graphviz digraph, each question a cluster holding its options. `graph` alone still prints Mermaid.
 - Added `browse`, which shows a point in the terminal: its questions grouped as in `status`, the selected question as in `show` with its description and option bodies rendered as GitHub-flavoured Markdown, the questions each option raises, a page for each option, other points, and `whatif`. `g` goes to any question or option id, matched fuzzily as you type. It redraws when the space's files change.

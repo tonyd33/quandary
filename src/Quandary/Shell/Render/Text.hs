@@ -62,7 +62,7 @@ module Quandary.Shell.Render.Text
 where
 
 import Data.Foldable (toList)
-import Data.List (intercalate, intersperse, sortOn, transpose, (!?))
+import Data.List (intercalate, intersperse, sortOn, transpose)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -140,6 +140,7 @@ issue _ (TitleMismatch o recorded now) =
 issue _ (TitleOnOther o) = "a ruling on " <> optionName o <> " records no title"
 issue _ (BadRank t) = badRank t
 issue _ EmptyReason = "empty reason"
+issue _ EmptyDesc = "empty desc"
 issue _ (BadProposed t) = "proposed is " <> t <> ": expected true"
 issue _ (BadUnverified t) = "unverified is " <> t <> ": expected true"
 issue _ (BadGrade t) = "bad grade " <> t <> ": grades are letters, digits, - and _"
@@ -161,6 +162,7 @@ field ToField = "to"
 field ReasonField = "reason"
 field GradeField = "grade"
 field GradesField = "grades"
+field NameField = "name"
 
 -- | Returns the point's status, given its analysis, its options' bounds
 -- and, for the table of points, the points.
@@ -253,7 +255,7 @@ choiceNote :: Space -> Choice -> [Chunk]
 choiceNote space c = joined " " [rankChunks c.rank, value]
   where
     value = case c.bounds of
-      Just b | b.lo > 0 || b.hi < topGrade space -> [Words (boundsText space b)]
+      Just b | b.lo > 0 || b.hi < topGrade space -> boundsChunks space b
       _ -> []
 
 takenChunks :: [Text] -> [Text]
@@ -267,15 +269,14 @@ closedWith _ [] = []
 closedWith end [x] = [x <> end]
 closedWith end (x : xs) = x : closedWith end xs
 
--- | Returns the bounds by grade name, one name when they meet.
-boundsText :: Space -> Bounds -> Text
-boundsText space b
-  | b.lo == b.hi = gradeName space b.lo
-  | otherwise = gradeName space b.lo <> ".." <> gradeName space b.hi
+-- | Returns the bounds by grade, one grade when they meet.
+boundsChunks :: Space -> Bounds -> [Chunk]
+boundsChunks space b
+  | b.lo == b.hi = [gradeAt space b.lo]
+  | otherwise = [gradeAt space b.lo, Words "..", gradeAt space b.hi]
 
--- | Returns the name of the grade at the position.
-gradeName :: Space -> Int -> Text
-gradeName space i = fromMaybe "" (space.grades !? i)
+gradeAt :: Space -> Int -> Chunk
+gradeAt space i = Graded (space.grades !! i)
 
 -- | Returns the rows in columns, each column padded to two past its widest
 -- cell.
@@ -284,8 +285,7 @@ columns rows = [Text.stripEnd (mconcat (zipWith (\w c -> Text.justifyLeft w ' ' 
   where
     widths = map ((+ 2) . maximum . map Text.length) (transpose rows)
 
--- | A piece of a line: words, an option, or a rank.
-data Chunk = Words Text | Named OptionId | Asked Id | Ranked Rank
+data Chunk = Words Text | Named OptionId | Asked Id | Ranked Rank | Graded Grade
 
 -- | Returns the chunks as text, each option by its id, each rank in
 -- brackets.
@@ -297,6 +297,7 @@ chunkText (Words t) = t
 chunkText (Named o) = optionName o
 chunkText (Asked q) = idText q
 chunkText (Ranked n) = "[" <> tshow (rankValue n) <> "]"
+chunkText (Graded g) = g.name
 
 -- | Returns the words as a piece, none when they are empty.
 wordsOf :: Text -> [Chunk]
@@ -437,7 +438,7 @@ rowDetail space name r = joined "  " [wordsOf (fromMaybe "" r.title), valueChunk
 valueChunks :: Space -> OptionRow -> [Chunk]
 valueChunks space r = joined "  " [value, rankChunks r.rank]
   where
-    value = maybe [] (\b -> [Words ("value " <> boundsText space b)]) r.bounds
+    value = maybe [] (\b -> Words "value " : boundsChunks space b) r.bounds
 
 -- | Returns the ruling's reason, after the point it comes from unless that
 -- is the point given.
@@ -449,16 +450,22 @@ rulingNote name (_, p, given)
 -- | Returns the option's grade and, when dominated, its dominator.
 rowNotes :: Space -> OptionRow -> [[Chunk]]
 rowNotes space r =
-  [[Words (assessmentNote a)] | a <- maybeToList r.assessment] ++ [dominationNote space d | d <- maybeToList r.dominated]
+  [assessmentNote a | a <- maybeToList r.assessment] ++ [dominationNote space d | d <- maybeToList r.dominated]
 
-assessmentNote :: Assessment -> Text
-assessmentNote a = "graded " <> a.grade <> (if a.unverified then ", unverified" else "") <> maybe "" (": " <>) a.why
+assessmentNote :: Assessment -> [Chunk]
+assessmentNote a =
+  [Words "graded ", Graded a.grade]
+    ++ [Words ", unverified" | a.unverified]
+    ++ [Words (": " <> w) | w <- maybeToList a.why]
 
 dominationNote :: Space -> Domination -> [Chunk]
 dominationNote space d =
-  [ Words ("dominated: at best " <> gradeName space d.atBest <> ", below ")
+  [ Words "dominated: at best "
+  , gradeAt space d.atBest
+  , Words ", below "
   , Named d.by
-  , Words (" at worst " <> gradeName space d.byAtWorst)
+  , Words " at worst "
+  , gradeAt space d.byAtWorst
   ]
 
 -- | An option's standing at a point: its ruling there, or else its verdict.

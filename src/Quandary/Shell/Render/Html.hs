@@ -323,6 +323,7 @@ chunksHtml p = mapM_ chunk
     chunk (Render.Asked q) = questionLink p q
     chunk (Render.Ranked n) =
       span_ [class_ "rank", style_ ("--rank: " <> Render.tshow (rankValue n))] (toHtml (Render.rankText (Just n)))
+    chunk (Render.Graded g) = maybe (toHtml g.name) (\d -> span_ [class_ "grade", helpOf d] (toHtml g.name)) g.desc
 
 pointsHtml :: [PointView] -> Html ()
 pointsHtml ps = do

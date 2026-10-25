@@ -1,2 +1,7 @@
 # The grades an option may be assessed at, lowest first.
-# grades: [broken, hack, costly, clean]
+# grades:
+#   - name: broken
+#     desc: does not work
+#   - hack
+#   - costly
+#   - clean

@@ -216,11 +216,11 @@ bounding m name s = (formula, each)
         highs = (high, reachingBelow highsBelow, refusedBelow query highsBelow)
         lows = (low, reachingBelow lowsBelow, refusedBelow query lowsBelow)
     top = topGrade m.space
-    positions = Map.fromList (zip m.space.grades [0 ..])
+    positions = Map.fromList (zip (map (.name) m.space.grades) [0 ..])
     at = optionAt m.space
     assessed (Listed i) = at i >>= (\(_, o) -> o.assessment)
     assessed (Other _) = Nothing
-    gradeOf a = Map.findWithDefault 0 a.grade positions
+    gradeOf a = positions Map.! a.grade.name
     low o = maybe 0 (\a -> if a.unverified then 0 else gradeOf a) (assessed o)
     high o = maybe top gradeOf (assessed o)
     -- For each grade above the lowest, the options graded below it and the

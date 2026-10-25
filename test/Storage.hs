@@ -238,9 +238,28 @@ grades =
           , graded ["  a: {title: A, assessment: {grade: hack, unverified: true, why: slow}}"]
           ]
       ps @?= []
-      [m'.space.grades | Just m' <- [m]] @?= [["broken", "hack", "clean"]]
+      [m'.space.grades | Just m' <- [m]] @?= [[Grade "broken" Nothing, Grade "hack" Nothing, Grade "clean" Nothing]]
       [o.assessment | Just m' <- [m], o <- (m'.space.questions Map.! Id "q").options]
-        @?= [Just Assessment {grade = "hack", unverified = True, why = Just "slow"}]
+        @?= [Just Assessment {grade = Grade "hack" Nothing, unverified = True, why = Just "slow"}]
+  , testCase "reads the grades, each a name or a mapping with its desc" $ do
+      (ps, m) <-
+        loadFiles
+          [config ["grades:", "  - name: broken", "    desc: does not work", "  - hack", "  - {name: clean, desc: ' fine '}"]]
+      ps @?= []
+      [m'.space.grades | Just m' <- [m]]
+        @?= [[Grade "broken" (Just "does not work"), Grade "hack" Nothing, Grade "clean" (Just "fine")]]
+  , testCase "a blank desc" $
+      problemsOf [config ["grades:", "  - {name: low, desc: ' '}"]]
+        >>= (@?= [("quandary.yaml", Just 2, Semantic EmptyDesc)])
+  , testCase "an unknown key under a grade" $
+      problemsOf [config ["grades:", "  - {name: low, colour: red}"]]
+        >>= (@?= [("quandary.yaml", Just 2, Format (UnknownKey "colour"))])
+  , testCase "a grade without a name" $
+      problemsOf [config ["grades:", "  - desc: does not work"]]
+        >>= (@?= [("quandary.yaml", Just 2, Semantic (Missing NameField))])
+  , testCase "grades as a mapping" $
+      problemsOf [config ["grades:", "  low:", "  high:"]]
+        >>= (@?= [("quandary.yaml", Just 2, Format (Expected ListShape))])
   , testCase "a grade the space does not declare" $
       problemsOf [config ["grades: [low, high]"], graded ["  a: {title: A, assessment: {grade: mid}}"]]
         >>= (@?= [("questions/q.md", Just 5, Semantic (UnknownGrade "mid"))])

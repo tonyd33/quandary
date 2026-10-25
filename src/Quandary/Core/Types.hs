@@ -5,6 +5,7 @@ module Quandary.Core.Types
   , Literal
   , Pick (..)
   , Space (..)
+  , Grade (..)
   , Question (..)
   , Option (..)
   , Assessment (..)
@@ -74,10 +75,16 @@ data Pick = One | Some | Any
   deriving (Eq, Show)
 
 data Space = Space
-  { grades :: [Text]
+  { grades :: [Grade]
   -- ^ The grades an option may be assessed at, lowest first.
   , questions :: Map Id Question
   , notes :: Map Id Note
+  }
+  deriving (Eq, Show)
+
+data Grade = Grade
+  { name :: Text
+  , desc :: Maybe Text
   }
   deriving (Eq, Show)
 
@@ -108,7 +115,7 @@ data Option = Option
 
 -- | An agent's grade of an option, not a ruling.
 data Assessment = Assessment
-  { grade :: Text
+  { grade :: Grade
   , unverified :: Bool
   , why :: Maybe Text
   }

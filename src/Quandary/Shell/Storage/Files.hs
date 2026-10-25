@@ -139,7 +139,16 @@ createMissing path make = do
   if exists then pure Nothing else Just (normalise path) <$ make
 
 configTemplate :: Text
-configTemplate = "# The grades an option may be assessed at, lowest first.\n# grades: [broken, hack, costly, clean]\n"
+configTemplate =
+  Text.unlines
+    [ "# The grades an option may be assessed at, lowest first."
+    , "# grades:"
+    , "#   - name: broken"
+    , "#     desc: does not work"
+    , "#   - hack"
+    , "#   - costly"
+    , "#   - clean"
+    ]
 
 stateDir :: FilePath -> FilePath
 stateDir root = root </> ".quandary"
@@ -178,8 +187,19 @@ readConfig root = do
     path = pathOf root ConfigDoc
     config y = do
       m <- fields ["grades"] y
-      grades <- textsField ConfigDoc "grades" m
+      grades <- listField ConfigDoc gradeSource "grades" m
       pure ConfigSource {grades}
+
+-- | Returns the grade from its name, or from a mapping of its fields.
+gradeSource :: Yaml -> Decode GradeSource
+gradeSource (Scalar l t) = pure GradeSource {at = n.at, name = Just n, desc = Nothing}
+  where
+    n = located ConfigDoc l t
+gradeSource y = do
+  m <- fields ["name", "desc"] y
+  name <- textField ConfigDoc "name" m
+  desc <- textField ConfigDoc "desc" m
+  pure GradeSource {at = Loc ConfigDoc (Just (lineOf y)), name, desc}
 
 documents ::
   FilePath -> FilePath -> (Text -> Document) -> (Document -> Yaml -> Body -> Text -> Decode a) -> IO [([FileProblem], a)]

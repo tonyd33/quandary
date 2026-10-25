@@ -223,12 +223,20 @@ Readable means openable without this app, by any text editor.
 `quandary.yaml` configures space; empty or only comments configures nothing:
 
 ```yaml
-grades: [broken, hack, costly, clean]
+grades:
+  - name: broken
+    desc: does not work
+  - name: hack
+    desc: works, but nobody should copy it
+  - costly
+  - clean
 ```
 
 | key | meaning |
 |---|---|
-| `grades` | grades option may be assessed at, lowest first; letters, digits, `-`, `_` |
+| `grades` | grades option may be assessed at, lowest first; each a name, or mapping of `name` and `desc` |
+| `name` | grade's name; letters, digits, `-`, `_` |
+| `desc` | grade's description, never blank; `serve` shows it on hover over grade's name |
 
 Space chooses grades; tool knows only order. Assessment in space declaring no grades = problem.
 
