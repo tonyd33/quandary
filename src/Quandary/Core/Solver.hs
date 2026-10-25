@@ -13,6 +13,9 @@ module Quandary.Core.Solver
 where
 
 import Control.Monad (foldM)
+import Data.IntMap.Strict (IntMap)
+import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet (IntSet)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
@@ -28,9 +31,9 @@ data Consequences
 
 data Query v m = Query
   { variables :: Set v
-  , design :: Set (Lit v) -> m (Maybe (Set v))
-  -- ^ Returns the variables a design holding the literals takes, or Nothing
-  -- when none does.
+  , design :: Set (Lit v) -> Set v -> m (Maybe (Set v))
+  -- ^ Returns the given variables a design holding the literals takes, or
+  -- Nothing when none does.
   }
 
 newtype Solver m = Solver
@@ -38,9 +41,9 @@ newtype Solver m = Solver
   -- ^ Run queries on one solver holding the formula.
   }
 
--- | Returns the variables true in a model of the clauses under the
+-- | Returns the given variables true in a model of the clauses under the
 -- assumptions, or Nothing when there is none.
-type Solve m = [Int] -> m (Maybe (Int -> Bool))
+type Solve m = [Int] -> [Int] -> m (Maybe IntSet)
 
 newtype Sat m = Sat
   { withClauses :: forall a. Int -> [[Int]] -> (Solve m -> m a) -> m a
@@ -59,13 +62,15 @@ satSession (Sat withClauses) f k = withClauses (Map.size n.numbers) n.clauses (k
 satQuery :: (Ord v, Applicative m) => Formula v -> Numbered v -> Solve m -> Query v m
 satQuery f n solve = Query {variables = f.variables, design}
   where
-    design s = case signed n.numbers s of
+    design s vs = case signed n.numbers s of
       Nothing -> pure Nothing
-      Just ls -> fmap (decoded n) <$> solve ls
+      Just ls -> fmap (decoded asked) <$> solve ls (IntMap.keys asked)
+      where
+        asked = numbersOf n.numbers vs
 
 -- | Holds when a design holds the literals.
 reaches :: Functor m => Query v m -> Set (Lit v) -> m Bool
-reaches query = fmap isJust . query.design
+reaches query held = isJust <$> query.design held Set.empty
 
 -- | Returns the verdict on each variable over the designs holding the
 -- literals, or Stale when none does.
@@ -85,14 +90,17 @@ literalsOver vs = Set.map Take vs <> Set.map Refuse vs
 -- Nothing when none does, querying only a candidate every design found so
 -- far holds.
 backbone :: (Ord v, Monad m) => Query v m -> Set (Lit v) -> Set (Lit v) -> m (Maybe (Set (Lit v)))
-backbone query held candidates = query.design held >>= traverse (\d -> go Set.empty (Set.filter (holdsIn d) candidates))
+backbone query held candidates = query.design held (variablesOf candidates) >>= traverse (\d -> go Set.empty (Set.filter (holdsIn d) candidates))
   where
     go found open = case Set.minView open of
       Nothing -> pure found
       Just (l, rest) ->
-        query.design (Set.insert (opposite l) held) >>= \case
+        query.design (Set.insert (opposite l) held) (variablesOf rest) >>= \case
           Nothing -> go (Set.insert l found) rest
           Just d -> go found (Set.filter (holdsIn d) rest)
+
+variablesOf :: Ord v => Set (Lit v) -> Set v
+variablesOf = Set.map optionOf
 
 holdsIn :: Ord v => Set v -> Lit v -> Bool
 holdsIn d (Take v) = Set.member v d
@@ -149,5 +157,10 @@ number :: Ord v => Map v Int -> Lit v -> Int
 number numbers (Take v) = numbers Map.! v
 number numbers (Refuse v) = negate (numbers Map.! v)
 
-decoded :: Numbered v -> (Int -> Bool) -> Set v
-decoded n model = Map.keysSet (Map.filter model n.numbers)
+-- | Returns the variables' numbers, each with its variable, leaving out a
+-- variable the formula lacks.
+numbersOf :: Ord v => Map v Int -> Set v -> IntMap v
+numbersOf numbers vs = IntMap.fromList [(i, v) | v <- Set.toList vs, Just i <- [Map.lookup v numbers]]
+
+decoded :: Ord v => IntMap v -> IntSet -> Set v
+decoded asked true = Set.fromList (IntMap.elems (IntMap.restrictKeys asked true))

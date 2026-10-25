@@ -216,7 +216,7 @@ bounds (Solver solving) m name s targets
       where
         go 0 = pure 0
         go k = do
-          r <- query.design (Set.unions [chosenRulings, Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)), Set.fromList [Refuse (Committed p) | p <- options, grade p < k]])
+          r <- query.design (Set.unions [chosenRulings, Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)), Set.fromList [Refuse (Committed p) | p <- options, grade p < k]]) Set.empty
           maybe (go (k - 1)) (const (pure k)) r
 
 -- | Returns each option whose upper bound is below a sibling's lower

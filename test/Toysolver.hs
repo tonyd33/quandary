@@ -1,5 +1,6 @@
 module Toysolver (toysolver) where
 
+import Data.IntSet qualified as IntSet
 import Quandary.Core.Solver (Sat (..), Solve, Solver, fromSat)
 import ToySolver.SAT qualified as SAT
 
@@ -13,8 +14,8 @@ session n clauses k = do
   solver <- SAT.newSolver
   SAT.newVars_ solver n
   mapM_ (SAT.addClause solver) clauses
-  k $ \ls -> do
+  k $ \ls vs -> do
     reached <- SAT.solveWith solver ls
     if not reached
       then pure Nothing
-      else Just . SAT.evalVar <$> SAT.getModel solver
+      else (\m -> Just (IntSet.fromList (filter (SAT.evalVar m) vs))) <$> SAT.getModel solver

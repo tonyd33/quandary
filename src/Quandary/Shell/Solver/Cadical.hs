@@ -30,17 +30,17 @@ cadical = fromSat Sat {withClauses = session}
 
 -- | Run solves on a fresh solver holding the clauses.
 session :: Int -> [[Int]] -> (Solve IO -> IO a) -> IO a
-session n clauses k = bracket initSolver release $ \solver -> do
+session _ clauses k = bracket initSolver release $ \solver -> do
   forM_ clauses $ \c -> do
     forM_ c (add solver . fromIntegral)
     add solver 0
-  k $ \ls -> do
+  k $ \ls vs -> do
     forM_ ls (assume solver . fromIntegral)
     result <- solve solver
     if result /= 10
       then pure Nothing
-      else Just . flip IntSet.member <$> trueVariables solver n
+      else Just <$> trueVariables solver vs
 
--- | Returns the variables 1 to n true in the solver's current model.
-trueVariables :: Ptr CCaDiCaL -> Int -> IO IntSet
-trueVariables solver n = IntSet.fromList <$> filterM (\v -> (> 0) <$> val solver (fromIntegral v)) [1 .. n]
+-- | Returns the given variables true in the solver's current model.
+trueVariables :: Ptr CCaDiCaL -> [Int] -> IO IntSet
+trueVariables solver vs = IntSet.fromList <$> filterM (\v -> (> 0) <$> val solver (fromIntegral v)) vs
