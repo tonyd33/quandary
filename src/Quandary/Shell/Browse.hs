@@ -225,7 +225,13 @@ supposed :: Space -> (Verb, Text) -> Either Text Supposition
 supposed space (v, t) = maybe (Left t) Right (Resolve.supposing space v t)
 
 analysisAt :: Building -> Text -> IO Analysis
-analysisAt b p = memoised b.live b.revision (Map.lookup p . (.analyses)) (\a memo -> memo {analyses = Map.insert p a memo.analyses}) (analyse cadical b.model p)
+analysisAt b p =
+  memoised
+    b.live
+    b.revision
+    (Map.lookup p . (.analyses))
+    (\a memo -> memo {analyses = Map.insert p a memo.analyses})
+    (analyse cadical b.model p)
 
 staleNames :: Building -> IO (Set Text)
 staleNames b = memoised b.live b.revision (.staleNames) (\ss memo -> memo {staleNames = Just ss}) (everyStale cadical b.model)

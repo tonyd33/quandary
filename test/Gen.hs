@@ -43,13 +43,21 @@ genGraded space = do
   where
     grades = ["low", "mid", "high"]
     assess o = do
-      a <- frequency [(1, pure Nothing), (2, Just <$> (Assessment <$> elements grades <*> frequency [(3, pure False), (1, pure True)] <*> pure Nothing))]
+      a <-
+        frequency
+          [ (1, pure Nothing)
+          , (2, Just <$> (Assessment <$> elements grades <*> frequency [(3, pure False), (1, pure True)] <*> pure Nothing))
+          ]
       pure o {assessment = a}
 
 genQuestion :: [OptionId] -> [OptionId] -> Text -> [Text] -> Gen Question
 genQuestion pool raisers q os = do
   pick <- elements [One, Some, Any]
-  raisedBy <- frequency [(1, pure []), (1, sublistOf' 2 raisers >>= mapM (\r -> (r :|) <$> frequency [(2, pure []), (1, sublistOf' 1 raisers)]))]
+  raisedBy <-
+    frequency
+      [ (1, pure [])
+      , (1, sublistOf' 2 raisers >>= mapM (\r -> (r :|) <$> frequency [(2, pure []), (1, sublistOf' 1 raisers)]))
+      ]
   options <- mapM (genOption pool) os
   forbid <- frequency [(3, pure []), (1, (: []) <$> genForbid pool)]
   pure (question q pick raisedBy options) {forbid}

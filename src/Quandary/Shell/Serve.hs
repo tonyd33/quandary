@@ -21,7 +21,8 @@ import Quandary.Shell.Resolve (Verb, verbNamed)
 
 app :: Live -> Text -> Int -> Application
 app live point port req respond
-  | not (hostAllowed port (requestHeaderHost req)) = respond (plain status403 "refused: the Host header is not this server's\n")
+  | not (hostAllowed port (requestHeaderHost req)) =
+      respond (plain status403 "refused: the Host header is not this server's\n")
   | requestMethod req /= methodGet = respond (plain status405 "only GET\n")
   | pathInfo req == ["events"] = respond (events live (since (queryString req)))
   | otherwise = case route point (pathInfo req) (queryString req) of

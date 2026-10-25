@@ -46,10 +46,13 @@ routes =
       , QuestionAt "current" (Id "sync/how")
       , Points
       , WhatifAt "edit-offline" []
-      , WhatifAt "current" [(AcceptVerb, "sync/git"), (DefeatVerb, "sync/how.other"), (ReopenVerb, "sync/lww"), (ReopenVerb, "sync/how")]
+      , WhatifAt
+          "current"
+          [(AcceptVerb, "sync/git"), (DefeatVerb, "sync/how.other"), (ReopenVerb, "sync/lww"), (ReopenVerb, "sync/how")]
       ]
   ]
-    ++ [ testCase "the root is the point served" $ uncurry (route "edit-offline") (decodePath "/") @?= Just (StatusAt "edit-offline")
+    ++ [ testCase "the root is the point served" $
+           uncurry (route "edit-offline") (decodePath "/") @?= Just (StatusAt "edit-offline")
        , testCase "an unknown verb is no route" $ parsed "/p/current/whatif?take=sync/git" @?= Nothing
        ]
 
@@ -75,7 +78,8 @@ pages =
       pageAt (QuestionAt "current" (Id "sync/how")) >>= \case
         QuestionPage v -> do
           v.question.id @?= Id "sync/how"
-          [idText o.raising.question.id | r <- v.rows, r.option == listed "sync/git", o <- r.objections] @?= ["conflict/shown", "sync/merge-conflicts"]
+          [idText o.raising.question.id | r <- v.rows, r.option == listed "sync/git", o <- r.objections]
+            @?= ["conflict/shown", "sync/merge-conflicts"]
         _ -> assertFailure "not a question page"
   , testCase "the points page lists every point, none stale" $
       pageAt Points >>= \case
@@ -109,14 +113,17 @@ html =
       let r = QuestionAt "current" (Id "sync/how")
       renderBS . document r <$> drawnAt r
   , testCase "a body's raw HTML is dropped" $ do
-      let out = LazyText.toStrict (renderText (markdown "Hi <script>alert(1)</script> there.\n\n<script>alert(2)</script>\n\n[x](javascript:alert(3))\n"))
+      let out =
+            LazyText.toStrict
+              (renderText (markdown "Hi <script>alert(1)</script> there.\n\n<script>alert(2)</script>\n\n[x](javascript:alert(3))\n"))
       assertBool (Text.unpack out) (not ("<script" `Text.isInfixOf` out))
       assertBool (Text.unpack out) (not ("javascript:" `Text.isInfixOf` out))
   ]
 
 server :: [TestTree]
 server =
-  [ testCase ("Host " <> show h <> " answers " <> show (statusCode expected)) $ statusFor h ["p", "current"] >>= (@?= expected)
+  [ testCase ("Host " <> show h <> " answers " <> show (statusCode expected)) $
+      statusFor h ["p", "current"] >>= (@?= expected)
   | (h, expected) <-
       [ (Just "127.0.0.1:8080", status200)
       , (Just "localhost:8080", status200)
@@ -126,7 +133,8 @@ server =
       , (Nothing, status403)
       ]
   ]
-    ++ [ testCase "an unknown question answers 404" $ statusFor (Just "localhost:8080") ["p", "current", "q", "sync", "nope"] >>= (@?= status404)
+    ++ [ testCase "an unknown question answers 404" $
+           statusFor (Just "localhost:8080") ["p", "current", "q", "sync", "nope"] >>= (@?= status404)
        , testCase "an unknown point answers 404" $ statusFor (Just "localhost:8080") ["p", "typo"] >>= (@?= status404)
        ]
 

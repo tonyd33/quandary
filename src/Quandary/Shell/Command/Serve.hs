@@ -18,5 +18,6 @@ run dir point port = withLive dir $ \live -> do
   where
     host = "127.0.0.1"
     announce = do
-      Text.putStrLn ("serving " <> Text.pack dir <> " at http://" <> Text.pack host <> ":" <> Text.pack (show port) <> link (StatusAt point))
+      Text.putStrLn
+        ("serving " <> Text.pack dir <> " at http://" <> Text.pack host <> ":" <> Text.pack (show port) <> link (StatusAt point))
       hFlush stdout

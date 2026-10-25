@@ -1,4 +1,5 @@
 indentation: 2
+column-limit: 120
 comma-style: leading
 import-export-style: leading
 indent-wheres: true

@@ -7,7 +7,20 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Fixtures (modelAt)
 import Gen
-import Quandary.Core.Analyse (Analysis (..), Bounds (..), Implication (..), Moved (..), QuestionState (..), Standing (..), Supposition (..), analyse, bounds, dominance, implications, whatif)
+import Quandary.Core.Analyse
+  ( Analysis (..)
+  , Bounds (..)
+  , Implication (..)
+  , Moved (..)
+  , QuestionState (..)
+  , Standing (..)
+  , Supposition (..)
+  , analyse
+  , bounds
+  , dominance
+  , implications
+  , whatif
+  )
 import Quandary.Core.Compile (compile)
 import Quandary.Core.Solver
 import Quandary.Core.Types
@@ -109,7 +122,9 @@ properties =
     consistent p = not (any (\o -> Set.member (Refuse o) p) [o | Take o <- Set.toList p])
     raisedBounds space p s q
       | Map.lookup q.id s.states == Just Dormant = Nothing
-      | otherwise = Just (Map.restrictKeys (bestDesigns space p) (Set.fromList [c | c <- choices q, Map.lookup c s.verdicts == Just Possible]))
+      | otherwise =
+          Just
+            (Map.restrictKeys (bestDesigns space p) (Set.fromList [c | c <- choices q, Map.lookup c s.verdicts == Just Possible]))
     consequencesOf space p = let f = compile space in bruteForceOn f (\q -> consequences q p)
     holds v (Take _) = v === Just Forced
     holds v (Refuse _) = v === Just Impossible

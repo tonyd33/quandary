@@ -14,7 +14,18 @@ import Graphics.Vty qualified as Vty
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 import Quandary.Core.View (QuestionView (..))
-import Quandary.Shell.Browse (Drawn (..), Focus (..), Live, Overlay (..), Page (..), Pane (..), Revision, Route (..), Shown (..), Tui (..))
+import Quandary.Shell.Browse
+  ( Drawn (..)
+  , Focus (..)
+  , Live
+  , Overlay (..)
+  , Page (..)
+  , Pane (..)
+  , Revision
+  , Route (..)
+  , Shown (..)
+  , Tui (..)
+  )
 import Quandary.Shell.Browse qualified as Browse
 import Quandary.Shell.Render.Tui (Name (..))
 import Quandary.Shell.Render.Tui qualified as Render

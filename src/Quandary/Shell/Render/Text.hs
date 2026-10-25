@@ -103,7 +103,13 @@ issue _ (DropsNothing o) = "drops " <> optionName o <> ", which no point it exte
 issue _ (DropsOwn o) = "drops " <> optionName o <> ", which it rules itself"
 issue _ (QuestionNotOption t) = t <> " is a question, not an option: name one of its options, or " <> t <> ".other"
 issue _ (TitleMismatch o recorded now) =
-  "the ruling on " <> optionName o <> " recorded the title \"" <> recorded <> "\"; the option is now \"" <> now <> "\": rule again or restore the title"
+  "the ruling on "
+    <> optionName o
+    <> " recorded the title \""
+    <> recorded
+    <> "\"; the option is now \""
+    <> now
+    <> "\": rule again or restore the title"
 issue _ (TitleOnOther o) = "a ruling on " <> optionName o <> " records no title"
 issue _ (BadRank t) = badRank t
 issue _ EmptyReason = "empty reason"
@@ -259,7 +265,10 @@ implicationLines m name s is = "" : "raises" : concatMap implication is
   where
     implication i = case i.values of
       Nothing -> ("  " <> raisedTitle i.raising <> " [dormant]") : coRaiserLines i.raising
-      Just bs -> ("  " <> raisedTitle i.raising) : coRaiserLines i.raising ++ filled "    " "      " (choiceChunks m.space (choicesAt m name bs s i.raising.question))
+      Just bs ->
+        ("  " <> raisedTitle i.raising)
+          : coRaiserLines i.raising
+          ++ filled "    " "      " (choiceChunks m.space (choicesAt m name bs s i.raising.question))
 
 raisedTitle :: Raising -> Text
 raisedTitle r = idText r.question.id <> ": " <> r.question.title
@@ -310,7 +319,11 @@ key (Other _) = "other"
 -- | Returns the options' lines in columns: standing, id, then title, rank
 -- and reason.
 optionLines :: Space -> Text -> [OptionRow] -> [Text]
-optionLines space name rows = zipWith (\r line -> Text.justifyLeft 12 ' ' (rowMark r) <> line) rows (columns [[optionName r.option, rowDetail space name r] | r <- rows])
+optionLines space name rows =
+  zipWith
+    (\r line -> Text.justifyLeft 12 ' ' (rowMark r) <> line)
+    rows
+    (columns [[optionName r.option, rowDetail space name r] | r <- rows])
 
 -- | Returns the option's ruling, or else its verdict.
 rowMark :: OptionRow -> Text
@@ -339,7 +352,13 @@ assessmentNote :: Assessment -> Text
 assessmentNote a = "graded " <> a.grade <> (if a.unverified then ", unverified" else "") <> maybe "" (": " <>) a.why
 
 dominationNote :: Space -> Domination -> Text
-dominationNote space d = "dominated: at best " <> gradeName space d.atBest <> ", below " <> optionName d.by <> " at worst " <> gradeName space d.byAtWorst
+dominationNote space d =
+  "dominated: at best "
+    <> gradeName space d.atBest
+    <> ", below "
+    <> optionName d.by
+    <> " at worst "
+    <> gradeName space d.byAtWorst
 
 -- | An option's standing at a point: its ruling there, or else its verdict.
 data Mark = Accepted | Defeated | Judged (Maybe Verdict)
@@ -372,7 +391,8 @@ showQuestion :: Space -> QuestionView -> Text
 showQuestion space v =
   Text.unlines $
     [questionTitle v.analysis v.question, questionShape v.question, "", v.question.description, ""]
-      ++ concat [line : map ("  " <>) (rowNotes space r) ++ raises r | (r, line) <- zip v.rows (optionLines space v.point v.rows)]
+      ++ concat
+        [line : map ("  " <>) (rowNotes space r) ++ raises r | (r, line) <- zip v.rows (optionLines space v.point v.rows)]
   where
     raises r = concat [("  raises " <> raisedTitle rq) : coRaiserLines rq | rq <- r.raises]
 
@@ -429,7 +449,11 @@ rulingLine m name l = verb <> " " <> optionName (optionOf l) <> source
 movedLines :: Model -> Text -> Moved -> [Text]
 movedLines m name mv =
   map question touched
-    ++ concat [conflictLines m name "the point is now stale, because of:" "and because of:" cores | StaleAt cores <- [mv.after], not (stale mv.before)]
+    ++ concat
+      [ conflictLines m name "the point is now stale, because of:" "and because of:" cores
+      | StaleAt cores <- [mv.after]
+      , not (stale mv.before)
+      ]
     ++ ["the point is no longer stale" | stale mv.before, not (stale mv.after)]
     ++ concat [branch p core | (p, core) <- mv.branches]
     ++ ["nothing moved" | null mv.options, onlyOptionsMoved mv]
@@ -444,7 +468,11 @@ movedLines m name mv =
         shown = case filter (\(o, a) -> o /= Other q || a == Forced) changes of
           [] -> changes
           cs -> cs
-        groups = [Text.intercalate ", " [key o | (o, a) <- shown, a == v] <> " " <> verdictText v | v <- [Forced, Possible, Impossible], any ((== v) . snd) shown]
+        groups =
+          [ Text.intercalate ", " [key o | (o, a) <- shown, a == v] <> " " <> verdictText v
+          | v <- [Forced, Possible, Impossible]
+          , any ((== v) . snd) shown
+          ]
         detail
           | fmap snd (Map.lookup q states) == Just Dormant || null groups = ""
           | otherwise = " (" <> Text.intercalate "; " groups <> ")"
@@ -457,7 +485,11 @@ movedLines m name mv =
 -- questions the supposed acceptances raise.
 whatifResult :: Text -> Either EditError Whatif -> Either Text [Text]
 whatifResult _ (Left e) = Left (editError e)
-whatifResult name (Right w) = Right (movedLines w.model name w.moved ++ maybe [] (\s -> implicationLines w.model name s w.implications) (standing w.moved.after))
+whatifResult name (Right w) =
+  Right
+    ( movedLines w.model name w.moved
+        ++ maybe [] (\s -> implicationLines w.model name s w.implications) (standing w.moved.after)
+    )
 
 -- | Holds when no question changed state and no branch or staleness
 -- moved.
@@ -524,7 +556,9 @@ rulings m name =
       ++ [rulingLine m name l | (l, _, _) <- sortOn order (Map.elems (effective m.points name))]
       ++ ["drop " <> optionName o <> " (" <> p.name <> ")" | p <- chain, o <- Set.toList p.drop]
       ++ ["defer " <> idText q <> " (" <> p.name <> ")" | p <- chain, q <- Set.toList p.defer]
-      ++ ["prefer " <> optionName o <> " " <> tshow (rankValue n) <> " (" <> from o <> ")" | (o, n) <- Map.toList (preferenceAt m.points name)]
+      ++ [ "prefer " <> optionName o <> " " <> tshow (rankValue n) <> " (" <> from o <> ")"
+         | (o, n) <- Map.toList (preferenceAt m.points name)
+         ]
   where
     chain = lineage m.points name
     order (l, _, _) = (case l of Take _ -> 0 :: Int; Refuse _ -> 1, optionOf l)
@@ -535,7 +569,9 @@ rulings m name =
 -- | Returns each link label in the space with how many links use it, most
 -- used first.
 links :: Space -> Text
-links space = Text.unlines (["link labels"] ++ if null counts then ["  none"] else map ("  " <>) (columns [[rel, tshow n] | (rel, n) <- counts]))
+links space =
+  Text.unlines
+    (["link labels"] ++ if null counts then ["  none"] else map ("  " <>) (columns [[rel, tshow n] | (rel, n) <- counts]))
   where
     counts = sortOn (\(rel, n) -> (Down n, rel)) (Map.toList (Map.fromListWith (+) [(l.rel, 1 :: Int) | l <- every]))
     every =
@@ -556,7 +592,14 @@ diff m (a, sa) (b, sb) =
       concat
         [ [idText q.id, stateAt sa q, stateAt sb q] : [["  " <> optionName o, markText x, markText y] | (o, x, y) <- options]
         | q <- Map.elems m.space.questions
-        , let options = [(o, x, y) | o <- choices q, let x = markAt ra sa o, let y = markAt rb sb o, x /= y, o /= Other q.id || isRuled x || isRuled y]
+        , let options =
+                [ (o, x, y)
+                | o <- choices q
+                , let x = markAt ra sa o
+                , let y = markAt rb sb o
+                , x /= y
+                , o /= Other q.id || isRuled x || isRuled y
+                ]
         , stateAt sa q /= stateAt sb q || not (null options)
         ]
     ra = effective m.points a

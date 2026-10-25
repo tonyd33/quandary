@@ -20,7 +20,16 @@ import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 import Quandary.Core.View
 import Quandary.Core.View qualified as View
-import Quandary.Shell.Browse (Drawn (..), Focus (..), Listing (..), Overlay (..), Page (..), Pane (..), Shown (..), Tui (..))
+import Quandary.Shell.Browse
+  ( Drawn (..)
+  , Focus (..)
+  , Listing (..)
+  , Overlay (..)
+  , Page (..)
+  , Pane (..)
+  , Shown (..)
+  , Tui (..)
+  )
 import Quandary.Shell.Browse qualified as Browse
 import Quandary.Shell.Render.Markdown (codeAttr, headingAttr, markdown)
 import Quandary.Shell.Render.Text qualified as Render
@@ -59,7 +68,10 @@ header t = txt (" quandary  " <> Browse.routeTitle t.route) <+> fill ' ' <+> txt
     count f s = length (filter f (Map.elems s.states))
 
 footer :: Widget Name
-footer = withAttr dimAttr (txt " j/k move  tab pane  enter open  space fold  u raiser  z closed  backspace back  p point  w whatif  q quit")
+footer =
+  withAttr
+    dimAttr
+    (txt " j/k move  tab pane  enter open  space fold  u raiser  z closed  backspace back  p point  w whatif  q quit")
 
 questionList :: Tui -> Model -> Standing -> Widget Name
 questionList t m s =
@@ -103,7 +115,11 @@ statusWidget :: Model -> Text -> Analysis -> Map OptionId Bounds -> Set Text -> 
 statusWidget m p a bs ss = vBox $ case a of
   StaleAt cores -> map txt (Render.staleLines m p cores)
   Fresh s ->
-    concat [withAttr dimAttr (txt (Render.groupTitle g.kind)) : map entry g.entries ++ [txt " "] | g <- View.statusGroups m p bs s, not (null g.entries)]
+    concat
+      [ withAttr dimAttr (txt (Render.groupTitle g.kind)) : map entry g.entries ++ [txt " "]
+      | g <- View.statusGroups m p bs s
+      , not (null g.entries)
+      ]
       ++ [withAttr dimAttr (txt "points"), pointsWidget (View.pointViews m ss)]
   where
     entry e = txtWrap ("  " <> idText e.question.id <> maybe "" ("  " <>) (Render.entryDetail m.space e.detail))
@@ -115,7 +131,9 @@ questionWidget :: Focus -> Space -> QuestionView -> Widget Name
 questionWidget f space v =
   vBox
     [ framed (Render.questionTitle v.analysis v.question) . viewport OptionList Vertical . vBox $
-        txt (Render.questionShape v.question) : txt " " : concat (zipWith optionEntry v.rows (Render.optionLines space v.point v.rows))
+        txt (Render.questionShape v.question)
+          : txt " "
+          : concat (zipWith optionEntry v.rows (Render.optionLines space v.point v.rows))
     , hBorder
     , scrolled BodyView (readingBody space f.option v.question)
     ]
@@ -130,11 +148,14 @@ questionWidget f space v =
 objectionsWidget :: Focus -> OptionId -> [Objection] -> Widget Name
 objectionsWidget f o obs
   | Set.member o f.expanded = objectionTree f obs
-  | otherwise = withAttr dimAttr (txt ("raises " <> Text.intercalate ", " [idText ob.raising.question.id | ob <- obs] <> "  (space)"))
+  | otherwise =
+      withAttr dimAttr (txt ("raises " <> Text.intercalate ", " [idText ob.raising.question.id | ob <- obs] <> "  (space)"))
 
 -- | Returns the selected listed option's description, else the question's.
 readingBody :: Space -> Maybe OptionId -> Question -> Widget Name
-readingBody space (Just (Listed i)) _ | Just (_, o) <- optionAt space i = vBox [withAttr headingAttr (txtWrap (idText o.id <> ": " <> o.title)), txt " ", markdown o.description]
+readingBody space (Just (Listed i)) _
+  | Just (_, o) <- optionAt space i =
+      vBox [withAttr headingAttr (txtWrap (idText o.id <> ": " <> o.title)), txt " ", markdown o.description]
 readingBody _ _ q = markdown q.description
 
 -- | Returns the widget selected and scrolled into view when the condition
@@ -154,7 +175,12 @@ objectionTree f = vBox . map objection
           : [padLeft (Pad 2) (txtWrap t) | Just t <- [Render.coRaiserText ob.raising]]
           ++ concatMap entry ob.options
     entry c =
-      padLeft (Pad 2) (highlighted (f.option == Just c.option) (txt (Text.justifyLeft 12 ' ' (Render.verdictText c.verdict) <> optionName c.option)))
+      padLeft
+        (Pad 2)
+        ( highlighted
+            (f.option == Just c.option)
+            (txt (Text.justifyLeft 12 ' ' (Render.verdictText c.verdict) <> optionName c.option))
+        )
         : [padLeft (Pad 4) (objectionTree f c.objections) | Set.member c.option f.expanded, not (null c.objections)]
 
 overlayWidget :: Tui -> Overlay -> Widget Name
@@ -163,7 +189,13 @@ overlayWidget t (PointPicker i) =
     [highlighted (n == i) (txt (padded name)) | (n, name) <- zip [0 ..] (Browse.pointNames t.drawn)]
 overlayWidget t (WhatifPicker o) =
   centerLayer . framed "whatif" $
-    txt (" " <> optionName o <> "\n a accept  d defeat  " <> whatifKeys (any Browse.reopenable (Browse.pageRow t.drawn o)) <> "esc cancel ")
+    txt
+      ( " "
+          <> optionName o
+          <> "\n a accept  d defeat  "
+          <> whatifKeys (any Browse.reopenable (Browse.pageRow t.drawn o))
+          <> "esc cancel "
+      )
 
 whatifKeys :: Bool -> Text
 whatifKeys True = "r reopen  "

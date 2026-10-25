@@ -23,21 +23,31 @@ examples =
     , testCase "refusing every answer of a live pick-one question is stale" $
         verdicts [how] [Refuse (other "sync/how"), Refuse (listed "sync/lww"), Refuse (listed "sync/git")] @?= Nothing
     , testCase "a pick-any question takes none" $
-        verdicts [extras] [Refuse (other "sync/extras"), Refuse (listed "sync/push")] @?= Just [(listed "sync/push", Impossible), (other "sync/extras", Impossible)]
+        verdicts [extras] [Refuse (other "sync/extras"), Refuse (listed "sync/push")]
+          @?= Just [(listed "sync/push", Impossible), (other "sync/extras", Impossible)]
     , testCase "a question not live refuses every option" $
         verdictOf [how, merge] [Refuse (listed "sync/git")] (listed "merge/manual") @?= Just Impossible
     , testCase "a live question with no listed options takes other" $
         verdictOf [how, merge, empty] [Take (listed "sync/git")] (other "merge/empty") @?= Just Forced
     , testCase "a question raised by options together is not live with one" $
-        verdictOf [how, extras, both] [Take (listed "sync/git"), Refuse (listed "sync/push")] (listed "merge/rebase") @?= Just Impossible
+        verdictOf [how, extras, both] [Take (listed "sync/git"), Refuse (listed "sync/push")] (listed "merge/rebase")
+          @?= Just Impossible
     , testCase "a question raised by options together is live with both" $
-        verdictOf [how, extras, both] [Take (listed "sync/git"), Take (listed "sync/push"), Refuse (other "merge/both")] (listed "merge/rebase") @?= Just Forced
+        verdictOf
+          [how, extras, both]
+          [Take (listed "sync/git"), Take (listed "sync/push"), Refuse (other "merge/both")]
+          (listed "merge/rebase")
+          @?= Just Forced
     , testCase "a live pick-some question takes at least one" $
         verdictOf [some] [Refuse (other "sync/channels"), Refuse (listed "sync/lan")] (listed "sync/cloud") @?= Just Forced
     , testCase "needs forces its target" $
         verdictOf [how, merge] [Take (listed "merge/auto")] (listed "sync/git") @?= Just Forced
     , testCase "why names the ruling that rules an option out" $
-        bruteForceOn [how] (\q -> core q (Set.fromList [Take (listed "sync/git"), Refuse (other "sync/how")]) (Set.singleton (Take (listed "sync/lww"))))
+        bruteForceOn
+          [how]
+          ( \q ->
+              core q (Set.fromList [Take (listed "sync/git"), Refuse (other "sync/how")]) (Set.singleton (Take (listed "sync/lww")))
+          )
           @?= Just (Set.fromList [Take (listed "sync/git")])
     , testCase "why is empty when no design takes the option" $
         bruteForceOn [how, merge] (\q -> core q Set.empty (Set.singleton (Take (listed "merge/never"))))

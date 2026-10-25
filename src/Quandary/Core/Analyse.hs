@@ -168,7 +168,11 @@ bounds (Solver solving) m name s targets
         -- below the cap.
         let bound (grade, below) cap = case Map.lookup cap below of
               Just relevant | not (Set.null relevant) -> do
-                held <- backbone query (Set.insert (Take (Chosen o)) chosenRulings) (Set.map (Take . Chosen) (Set.delete o (Set.difference relevant forced)))
+                held <-
+                  backbone
+                    query
+                    (Set.insert (Take (Chosen o)) chosenRulings)
+                    (Set.map (Take . Chosen) (Set.delete o (Set.difference relevant forced)))
                 let seeds = foldMap (\ls -> Set.fromList [p | Take (Chosen p) <- Set.toList ls]) held
                 best query o (Set.insert o seeds) grade cap
               _ -> pure cap
@@ -189,7 +193,10 @@ bounds (Solver solving) m name s targets
     -- options whose commitments can reach one.
     reachingBelow grade = Map.fromList [(k, closure (Set.fromList [p | p <- options, grade p < k])) | k <- [1 .. top]]
     closure r =
-      let r' = Set.union r (Set.fromList [c | q <- Map.elems m.space.questions, any (`Set.member` r) (choices q), g <- q.raisedBy, c <- toList g])
+      let r' =
+            Set.union
+              r
+              (Set.fromList [c | q <- Map.elems m.space.questions, any (`Set.member` r) (choices q), g <- q.raisedBy, c <- toList g])
        in if r' == r then r else closure r'
     lows = (low, reachingBelow low)
     highs = (high, reachingBelow high)
@@ -266,7 +273,11 @@ conflicts :: Monad m => Query OptionId m -> Set Literal -> Set Literal -> m [Set
 conflicts query rulings ls = sortOn Set.size <$> go []
   where
     -- Explain under each hitting set in turn, stopping at the first core.
-    go found = foldr (\h next -> core query (Set.difference rulings h) ls >>= maybe next (go . (: found))) (pure found) (hittingSets found)
+    go found =
+      foldr
+        (\h next -> core query (Set.difference rulings h) ls >>= maybe next (go . (: found)))
+        (pure found)
+        (hittingSets found)
 
 allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool
 allM p = foldr (\x rest -> p x >>= \ok -> if ok then rest else pure False) (pure True)
@@ -275,7 +286,9 @@ allM p = foldr (\x rest -> p x >>= \ok -> if ok then rest else pure False) (pure
 hittingSets :: Ord a => [Set a] -> [Set a]
 hittingSets = foldr extend [Set.empty]
   where
-    extend s hs = minimal (Set.toList (Set.fromList [h' | h <- hs, h' <- if Set.disjoint h s then [Set.insert x h | x <- Set.toList s] else [h]]))
+    extend s hs =
+      minimal
+        (Set.toList (Set.fromList [h' | h <- hs, h' <- if Set.disjoint h s then [Set.insert x h | x <- Set.toList s] else [h]]))
     minimal hs = [h | h <- hs, not (any (`Set.isProperSubsetOf` h) hs)]
 
 data Moved = Moved
@@ -580,7 +593,13 @@ adopt solver m name confirmation = case Map.lookup name m.points of
           m' = m {points = rebased}
       (fixed, dropped) <- foldM (settle adopted) (m', []) (reverse (descendants rebased parent))
       mv <- movement solver m {points = Map.delete name m.points} fixed parent
-      pure Adoption {model = fixed {points = Map.map (\x -> if x.extends == Just parent then prune fixed.points x else x) fixed.points}, into = parent, moved = mv, dropped}
+      pure
+        Adoption
+          { model = fixed {points = Map.map (\x -> if x.extends == Just parent then prune fixed.points x else x) fixed.points}
+          , into = parent
+          , moved = mv
+          , dropped
+          }
     prune ps x = case x.extends of
       Nothing -> x
       Just e ->
@@ -588,7 +607,10 @@ adopt solver m name confirmation = case Map.lookup name m.points of
             same l o r = case Map.lookup o inherited of
               Just (l', _, r') -> l' == l o && r' == r
               Nothing -> False
-         in x {accept = Map.filterWithKey (\o r -> not (same Take o r)) x.accept, defeat = Map.filterWithKey (\o r -> not (same Refuse o r)) x.defeat}
+         in x
+              { accept = Map.filterWithKey (\o r -> not (same Take o r)) x.accept
+              , defeat = Map.filterWithKey (\o r -> not (same Refuse o r)) x.defeat
+              }
     settle adopted (now, ds) n =
       analyse solver now n >>= \case
         Fresh _ -> pure (now, ds)

@@ -21,19 +21,23 @@ cli =
         r <- quandary dir ["check"]
         r @?= (ExitSuccess, "ok\n", "")
     , testCase "check reports a problem with its file and line" $ withCopy $ \dir -> do
-        Text.writeFile (dir </> "questions/store/where.md") . Text.replace "pick: one" "pick: one\nrank: 3" =<< Text.readFile (dir </> "questions/store/where.md")
+        Text.writeFile (dir </> "questions/store/where.md") . Text.replace "pick: one" "pick: one\nrank: 3"
+          =<< Text.readFile (dir </> "questions/store/where.md")
         (code, out, _) <- quandary dir ["check"]
         code @?= ExitFailure 1
         lines out @?= [dir </> "questions/store/where.md:4: unknown key rank"]
     , testCase "check reports a stale point" $ withCopy $ \dir -> do
-        writeFile (dir </> "points/broken.md") "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
+        writeFile
+          (dir </> "points/broken.md")
+          "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
         (code, out, _) <- quandary dir ["check"]
         code @?= ExitFailure 1
         lines out @?= [dir </> "points/broken.md: the point is stale"]
     , testCase "browse and serve refuse a directory that does not exist" $ withCopy $ \dir -> do
         let missing = dir </> "missing"
         results <- mapM (quandary missing) [["browse"], ["serve"]]
-        [(code, err) | (code, _, err) <- results] @?= replicate 2 (ExitFailure 1, "quandary: " <> missing <> " is not a directory\n")
+        [(code, err) | (code, _, err) <- results]
+          @?= replicate 2 (ExitFailure 1, "quandary: " <> missing <> " is not a directory\n")
     , testCase "a command refuses a space with problems" $ withCopy $ \dir -> do
         writeFile (dir </> "questions/bad.md") "no frontmatter\n"
         (code, out, err) <- quandary dir ["status"]
@@ -51,7 +55,11 @@ cli =
         (code, out, err) <- quandary dir ["accept", "sync/crdt"]
         code @?= ExitFailure 1
         out @?= ""
-        lines err @?= ["quandary: refused: no design would reach the point, because of:", "  accept store/files (current: must open in any editor)", "  accept sync/crdt"]
+        lines err
+          @?= [ "quandary: refused: no design would reach the point, because of:"
+              , "  accept store/files (current: must open in any editor)"
+              , "  accept sync/crdt"
+              ]
         later <- readFile' (dir </> "points/current.md")
         later @?= before
     , testCase "whatif writes nothing" $ withCopy $ \dir -> do
@@ -141,7 +149,11 @@ cli =
     , testCase "whatif names the rulings a stale point cannot hold together" $ withCopy $ \dir -> do
         (code, out, _) <- quandary dir ["whatif", "accept", "sync/crdt"]
         code @?= ExitSuccess
-        take 3 (lines out) @?= ["the point is now stale, because of:", "  accept store/files (current: must open in any editor)", "  accept sync/crdt (current)"]
+        take 3 (lines out)
+          @?= [ "the point is now stale, because of:"
+              , "  accept store/files (current: must open in any editor)"
+              , "  accept sync/crdt (current)"
+              ]
     , testCase "whatif takes no reasons" $ withCopy $ \dir -> do
         r <- quandary dir ["whatif", "defeat", "sync/git", "because"]
         r @?= (ExitFailure 1, "", "quandary: unknown id because: whatif takes verbs and ids, no reasons\n")
@@ -204,10 +216,17 @@ cli =
         writeGraded dir
         let path = dir </> "questions/sync/merge-conflicts.md"
         before <- Text.readFile path
-        Text.writeFile path (Text.replace "    title: An automatic merge driver for Markdown\n" "    title: An automatic merge driver for Markdown\n    assessment: {grade: hack}\n" before)
+        Text.writeFile
+          path
+          ( Text.replace
+              "    title: An automatic merge driver for Markdown\n"
+              "    title: An automatic merge driver for Markdown\n    assessment: {grade: hack}\n"
+              before
+          )
         _ <- quandary dir ["exhaust", "sync/merge-conflicts", "--", "the driver or nothing"]
         (_, out, _) <- quandary dir ["show", "sync/how"]
-        filter ("sync/git " `isInfixOf`) (lines out) @?= ["possible    sync/git        Git repo under the hood  value broken..hack"]
+        filter ("sync/git " `isInfixOf`) (lines out)
+          @?= ["possible    sync/git        Git repo under the hood  value broken..hack"]
     , testCase "show prints each question an option raises once, with its co-raisers" $ withHistory $ \dir -> do
         (_, out, _) <- quandary dir ["show", "sync/how"]
         drop 1 (dropWhile (not . ("defeated" `isPrefixOf`)) (lines out))
@@ -220,9 +239,13 @@ cli =
               , "possible    sync/how.other  value broken..clean"
               ]
         (_, out', _) <- quandary dir ["show", "extra/pick"]
-        take 3 (dropWhile (/= "  graded clean: simple") (lines out')) @?= ["  graded clean: simple", "  raises extra/history: What history keeps", "    with sync/git"]
+        take 3 (dropWhile (/= "  graded clean: simple") (lines out'))
+          @?= ["  graded clean: simple", "  raises extra/history: What history keeps", "    with sync/git"]
     , testCase "show wraps co-raisers at 80 columns" $ withHistory $ \dir -> do
-        editHistory dir "[sync/git, extra/b]]" "[sync/git, extra/b], [sync/git, extra/c], [sync/git, extra/pick.other], [sync/git, store/sqlite]]"
+        editHistory
+          dir
+          "[sync/git, extra/b]]"
+          "[sync/git, extra/b], [sync/git, extra/c], [sync/git, extra/pick.other], [sync/git, store/sqlite]]"
         (_, out, _) <- quandary dir ["show", "sync/how"]
         filter ("    " `isPrefixOf`) (lines out)
           @?= [ "    with any of extra/a, extra/b, extra/c, extra/pick.other, store/sqlite"
@@ -238,7 +261,9 @@ cli =
         (_, out, _) <- quandary dir ["show", "sync/how"]
         assertBool out ("    with any of extra/a, (extra/b with store/files)" `elem` lines out)
         (_, out', _) <- quandary dir ["show", "extra/pick"]
-        assertBool out' (["  raises extra/history: What history keeps", "    with (sync/git with store/files)"] `isInfixOf` lines out')
+        assertBool
+          out'
+          (["  raises extra/history: What history keeps", "    with (sync/git with store/files)"] `isInfixOf` lines out')
         (_, out'', _) <- quandary dir ["whatif", "accept", "sync/git"]
         assertBool out'' ("    with any of extra/a, (extra/b with store/files)" `elem` lines out'')
     , testCase "whatif accept lists what the accepted options raise, with bounds at the new point" $ withHistory $ \dir -> do
@@ -288,12 +313,16 @@ cli =
         code @?= ExitSuccess
         lines out @?= ["ranked sync/crdt 3", "  nothing moved", "  sync/crdt is impossible at this point"]
     , testCase "status at a stale point fails" $ withCopy $ \dir -> do
-        writeFile (dir </> "points/broken.md") "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
+        writeFile
+          (dir </> "points/broken.md")
+          "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
         (code, out, _) <- quandary dir ["--point", "broken", "status"]
         code @?= ExitFailure 1
         assertBool out ("stale: no design holds these rulings:" `isInfixOf` out)
     , testCase "settle at a stale point is refused" $ withCopy $ \dir -> do
-        writeFile (dir </> "points/broken.md") "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
+        writeFile
+          (dir </> "points/broken.md")
+          "---\naccept:\n  sync/crdt: {title: CRDT per note}\n  store/files: {title: Plain Markdown files in a folder}\n---\n"
         before <- readFile' (dir </> "points/broken.md")
         r <- quandary dir ["--point", "broken", "settle", "sync/how", "--", "all", "of", "it"]
         r @?= (ExitFailure 1, "", "quandary: sync/how cannot be settled: the point is stale\n")
@@ -307,7 +336,8 @@ cli =
         assertBool point ("drop: [store/files]" `isInfixOf` point)
     , testCase "ruling again changes the reason" $ withCopy $ \dir -> do
         (code, out, _) <- quandary dir ["defeat", "sync/lww", "loses", "edits"]
-        (code, lines out) @?= (ExitSuccess, ["defeated sync/lww", "  nothing moved", "  reason: silently loses edits made offline -> loses edits"])
+        (code, lines out)
+          @?= (ExitSuccess, ["defeated sync/lww", "  nothing moved", "  reason: silently loses edits made offline -> loses edits"])
     , testCase "a pick-one question named in a refusal" $ withCopy $ \dir -> do
         _ <- quandary dir ["exhaust", "store/where", "all", "there", "is"]
         (_, _, err) <- quandary dir ["accept", "store/sqlite"]

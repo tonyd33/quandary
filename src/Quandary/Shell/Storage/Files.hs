@@ -34,7 +34,16 @@ import Quandary.Core.Types
 import Quandary.Core.Validate (Model, Validation (..))
 import Quandary.Shell.Storage.Yaml
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeFile)
-import System.FilePath (dropExtension, makeRelative, normalise, splitDirectories, takeDirectory, takeExtension, (<.>), (</>))
+import System.FilePath
+  ( dropExtension
+  , makeRelative
+  , normalise
+  , splitDirectories
+  , takeDirectory
+  , takeExtension
+  , (<.>)
+  , (</>)
+  )
 import Text.Libyaml qualified as Y
 
 data FileProblem = FileProblem
@@ -118,7 +127,8 @@ readConfig root = do
       grades <- textsField ConfigDoc "grades" m
       pure ConfigSource {grades}
 
-documents :: FilePath -> FilePath -> (Text -> Document) -> (Document -> Yaml -> Body -> Text -> Decode a) -> IO [([FileProblem], a)]
+documents ::
+  FilePath -> FilePath -> (Text -> Document) -> (Document -> Yaml -> Body -> Text -> Decode a) -> IO [([FileProblem], a)]
 documents root dir kind decode = do
   paths <- markdownUnder (root </> dir)
   forM paths $ \path -> do
@@ -158,7 +168,8 @@ complain :: Int -> FormatIssue -> Decode ()
 complain l i = ([(l, i)], ())
 
 -- | Decode one file, its frontmatter and body.
-readDocument :: Document -> (Document -> Yaml -> Body -> Text -> Decode a) -> ByteString.ByteString -> IO ([(Int, FormatIssue)], a)
+readDocument ::
+  Document -> (Document -> Yaml -> Body -> Text -> Decode a) -> ByteString.ByteString -> IO ([(Int, FormatIssue)], a)
 readDocument doc decode bytes = case decodeUtf8' bytes of
   Left _ -> pure (decode doc (Mapping 1 []) emptyBody "" `with` [(1, NotUtf8)])
   Right content -> case Text.lines content of
@@ -337,7 +348,18 @@ point doc y _ body = do
   drop' <- textsField doc "drop" m
   defer <- textsField doc "defer" m
   prefer <- entriesOf (Map.lookup "prefer" m) >>= mapM (\(l, k, v) -> (,) (located doc l k) <$> text doc v)
-  pure PointSource {name = Located (Loc doc Nothing) (documentId doc), extends, proposed, accept, defeat, drop = drop', defer, prefer, body}
+  pure
+    PointSource
+      { name = Located (Loc doc Nothing) (documentId doc)
+      , extends
+      , proposed
+      , accept
+      , defeat
+      , drop = drop'
+      , defer
+      , prefer
+      , body
+      }
   where
     ruling (l, k, v) = do
       r <- fields ["title", "reason"] v
@@ -373,14 +395,19 @@ pointEvents p =
           ++ [("defeat", rulings p.defeat) | not (Map.null p.defeat)]
           ++ [("drop", sequence' [scalar (optionName o) | o <- Set.toList p.drop]) | not (Set.null p.drop)]
           ++ [("defer", sequence' [scalar q | Id q <- Set.toList p.defer]) | not (Set.null p.defer)]
-          ++ [ ("prefer", mapping Y.FlowMapping [(optionName o, scalar (Text.pack (show (rankValue n)))) | (o, n) <- Map.toList p.prefer])
+          ++ [ ( "prefer"
+               , mapping Y.FlowMapping [(optionName o, scalar (Text.pack (show (rankValue n)))) | (o, n) <- Map.toList p.prefer]
+               )
              | not (Map.null p.prefer)
              ]
       )
     ++ [Y.EventDocumentEnd, Y.EventStreamEnd]
   where
     rulings rs = mapping Y.BlockMapping [(optionName o, ruling r) | (o, r) <- Map.toList rs]
-    ruling r = mapping Y.FlowMapping ([("title", scalar t) | Just t <- [r.title]] ++ [("reason", scalar (reasonText t)) | Just t <- [r.reason]])
+    ruling r =
+      mapping
+        Y.FlowMapping
+        ([("title", scalar t) | Just t <- [r.title]] ++ [("reason", scalar (reasonText t)) | Just t <- [r.reason]])
     scalar t = [Y.EventScalar (encodeUtf8 t) Y.NoTag Y.Any Nothing]
     sequence' items = [Y.EventSequenceStart Y.NoTag Y.FlowSequence Nothing] ++ concat items ++ [Y.EventSequenceEnd]
     mapping style kvs =

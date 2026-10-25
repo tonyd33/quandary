@@ -74,7 +74,12 @@ formatProblems =
         >>= (@?= [("questions/q.md", Just 4, Format (Yaml (DuplicateKey "pick")))])
   , testCase "an anchor and an alias" $
       problemsOf [question "q" ["title: &t Q", "pick: one", "links: [{rel: gains, to: *t}]"] ["Q."]]
-        >>= (@?= [("questions/q.md", Just 2, Format (Yaml Anchor)), ("questions/q.md", Just 4, Format (Yaml Alias)), ("questions/q.md", Just 4, Semantic (UnknownTarget ""))])
+        >>= ( @?=
+                [ ("questions/q.md", Just 2, Format (Yaml Anchor))
+                , ("questions/q.md", Just 4, Format (Yaml Alias))
+                , ("questions/q.md", Just 4, Semantic (UnknownTarget ""))
+                ]
+            )
   , testCase "a tag" $
       problemsOf [question "q" ["title: !!str Q", "pick: one"] ["Q."]]
         >>= (@?= [("questions/q.md", Just 2, Format (Yaml Tag))])
@@ -86,10 +91,21 @@ formatProblems =
         >>= (@?= [("questions/q.md", Just 4, Format (Expected ListShape))])
   , testCase "no frontmatter" $
       problemsOf [("questions/q.md", "Q.\n")]
-        >>= (@?= [("questions/q.md", Just 1, Format NoFrontmatter), ("questions/q.md", Nothing, Semantic (Missing TitleField)), ("questions/q.md", Nothing, Semantic (Missing PickField))])
+        >>= ( @?=
+                [ ("questions/q.md", Just 1, Format NoFrontmatter)
+                , ("questions/q.md", Nothing, Semantic (Missing TitleField))
+                , ("questions/q.md", Nothing, Semantic (Missing PickField))
+                ]
+            )
   , testCase "unclosed frontmatter" $
       problemsOf [("questions/q.md", "---\ntitle: Q\n")]
-        >>= (@?= [("questions/q.md", Just 1, Format UnclosedFrontmatter), ("questions/q.md", Nothing, Semantic (Missing TitleField)), ("questions/q.md", Nothing, Semantic (Missing PickField)), ("questions/q.md", Nothing, Semantic MissingDescription)])
+        >>= ( @?=
+                [ ("questions/q.md", Just 1, Format UnclosedFrontmatter)
+                , ("questions/q.md", Nothing, Semantic (Missing TitleField))
+                , ("questions/q.md", Nothing, Semantic (Missing PickField))
+                , ("questions/q.md", Nothing, Semantic MissingDescription)
+                ]
+            )
   , testCase "a YAML syntax error" $ do
       ps <- problemsOf [question "q" ["title: Q", "pick: [one"] ["Q."]]
       [(f, isSyntax i) | (f, _, i) <- take 1 ps] @?= [("questions/q.md", True)]
@@ -116,22 +132,37 @@ spaceProblems =
       problemsOf [question "q" ["title: Q", "pick: one", "options:", "  a: {title: A}"] ["Q."]]
         >>= (@?= [("questions/q.md", Just 5, Semantic (MissingSection "a"))])
   , testCase "an empty option section" $
-      problemsOf [question "q" ["title: Q", "pick: one", "options:", "  a: {title: A}"] ["Q.", "", "## a", "", "## Background", "", "More."]]
+      problemsOf
+        [ question
+            "q"
+            ["title: Q", "pick: one", "options:", "  a: {title: A}"]
+            ["Q.", "", "## a", "", "## Background", "", "More."]
+        ]
         >>= (@?= [("questions/q.md", Just 9, Semantic MissingDescription)])
   , testCase "a duplicate option section" $
-      problemsOf [question "q" ["title: Q", "pick: one", "options:", "  a: {title: A}"] ["Q.", "", "## a", "", "A.", "", "## a", "", "A again."]]
+      problemsOf
+        [ question
+            "q"
+            ["title: Q", "pick: one", "options:", "  a: {title: A}"]
+            ["Q.", "", "## a", "", "A.", "", "## a", "", "A again."]
+        ]
         >>= (@?= [("questions/q.md", Just 13, Semantic (DuplicateSection "a"))])
   , testCase "an unknown option" $
-      problemsOf [question "q" ["title: Q", "pick: one", "options:", "  a: {title: A, needs: [b]}"] ["Q.", "", "## a", "", "A."]]
+      problemsOf
+        [question "q" ["title: Q", "pick: one", "options:", "  a: {title: A, needs: [b]}"] ["Q.", "", "## a", "", "A."]]
         >>= (@?= [("questions/q.md", Just 5, Semantic (UnknownOption "b"))])
   , testCase "a raiser of options taken together" $ do
       (ps, m) <-
         loadFiles
-          [ question "q" ["title: Q", "pick: any", "options:", "  a: {title: A}", "  b: {title: B}"] ["Q.", "", "## a", "", "A.", "", "## b", "", "B."]
+          [ question
+              "q"
+              ["title: Q", "pick: any", "options:", "  a: {title: A}", "  b: {title: B}"]
+              ["Q.", "", "## a", "", "A.", "", "## b", "", "B."]
           , question "r" ["title: R", "pick: one", "raised-by: [[a, b], q.other]"] ["R."]
           ]
       ps @?= []
-      [(m'.space.questions Map.! Id "r").raisedBy | Just m' <- [m]] @?= [[Listed (Id "a") :| [Listed (Id "b")], Other (Id "q") :| []]]
+      [(m'.space.questions Map.! Id "r").raisedBy | Just m' <- [m]]
+        @?= [[Listed (Id "a") :| [Listed (Id "b")], Other (Id "q") :| []]]
   , testCase "an empty raiser" $
       problemsOf [question "r" ["title: R", "pick: one", "raised-by: [[]]"] ["R."]]
         >>= (@?= [("questions/r.md", Just 4, Semantic (EmptyList RaisedByField))])
@@ -143,7 +174,10 @@ spaceProblems =
         >>= (@?= [])
   , testCase "a question file named after its directory" $
       problemsOf
-        [ question "pay/crash/crash" ["title: Q", "pick: any", "options:", "  retry: {title: A}"] ["Q.", "", "## pay/crash/retry", "", "A."]
+        [ question
+            "pay/crash/crash"
+            ["title: Q", "pick: any", "options:", "  retry: {title: A}"]
+            ["Q.", "", "## pay/crash/retry", "", "A."]
         , question "pay/after" ["title: P", "pick: one", "raised-by: [pay/crash/retry, pay/crash.other]"] ["P."]
         ]
         >>= (@?= [])
@@ -169,7 +203,15 @@ spaceProblems =
       problemsOf
         [ question
             "q"
-            ["title: Q", "pick: any", "options:", "  a: {title: A}", "  b: {title: B}", "forbid:", "  - all: [a, not b]", "  - all: [not b, a]"]
+            [ "title: Q"
+            , "pick: any"
+            , "options:"
+            , "  a: {title: A}"
+            , "  b: {title: B}"
+            , "forbid:"
+            , "  - all: [a, not b]"
+            , "  - all: [not b, a]"
+            ]
             ["Q.", "", "## a", "", "A.", "", "## b", "", "B."]
         ]
         >>= (@?= [("questions/q.md", Just 9, Semantic (DuplicateForbid (Loc (QuestionDoc "q") (Just 8))))])
@@ -190,7 +232,11 @@ spaceProblems =
 grades :: [TestTree]
 grades =
   [ testCase "reads the grades and an option's assessment" $ do
-      (ps, m) <- loadFiles [config ["grades: [broken, hack, clean]"], graded ["  a: {title: A, assessment: {grade: hack, unverified: true, why: slow}}"]]
+      (ps, m) <-
+        loadFiles
+          [ config ["grades: [broken, hack, clean]"]
+          , graded ["  a: {title: A, assessment: {grade: hack, unverified: true, why: slow}}"]
+          ]
       ps @?= []
       [m'.space.grades | Just m' <- [m]] @?= [["broken", "hack", "clean"]]
       [o.assessment | Just m' <- [m], o <- (m'.space.questions Map.! Id "q").options]
@@ -281,7 +327,11 @@ pointProblems =
         >>= (@?= [("points/branch.md", Just 2, Semantic (UnknownPoint "nowhere"))])
   , testCase "an extends cycle" $
       problemsOf [space, point "x" ["extends: y"], point "y" ["extends: x"]]
-        >>= (@?= [("points/x.md", Nothing, Semantic (ExtendsCycle ["x", "y", "x"])), ("points/y.md", Nothing, Semantic (ExtendsCycle ["y", "x", "y"]))])
+        >>= ( @?=
+                [ ("points/x.md", Nothing, Semantic (ExtendsCycle ["x", "y", "x"]))
+                , ("points/y.md", Nothing, Semantic (ExtendsCycle ["y", "x", "y"]))
+                ]
+            )
   , testCase "a rank out of range" $
       problemsOf [space, point "current" ["prefer: {a: 11}"]]
         >>= (@?= [("points/current.md", Just 2, Semantic (BadRank "11"))])
@@ -296,7 +346,13 @@ pointProblems =
 bodies :: [TestTree]
 bodies =
   [ testCase "headings in code and setext headings" $ do
-      (ps, m) <- loadFiles [question "q" ["title: Q", "pick: one", "options:", "  a: {title: A}"] ["Q.", "", "```", "## a", "```", "", "a", "--", "", "A."]]
+      (ps, m) <-
+        loadFiles
+          [ question
+              "q"
+              ["title: Q", "pick: one", "options:", "  a: {title: A}"]
+              ["Q.", "", "```", "## a", "```", "", "a", "--", "", "A."]
+          ]
       ps @?= []
       [o.description | Just m' <- [m], o <- (m'.space.questions Map.! Id "q").options] @?= ["A."]
   ]

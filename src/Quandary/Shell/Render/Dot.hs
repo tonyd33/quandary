@@ -56,7 +56,13 @@ into q = optionNode (Other q) <> attributes [("lhead", clusterName q), ("penwidt
 forbidNodes :: Int -> ForbidNode -> [Text]
 forbidNodes n f =
   ["  " <> forbid <> attributes [("shape", "hexagon"), ("label", quote f.label)]]
-    ++ ["  " <> forbid <> " -> " <> optionNode (optionOf l) <> attributes [("style", "dotted"), ("dir", "none"), ("label", side l)] | l <- f.literals]
+    ++ [ "  "
+           <> forbid
+           <> " -> "
+           <> optionNode (optionOf l)
+           <> attributes [("style", "dotted"), ("dir", "none"), ("label", side l)]
+       | l <- f.literals
+       ]
   where
     forbid = quote ("forbid " <> Render.tshow n)
 

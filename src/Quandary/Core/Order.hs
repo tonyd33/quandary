@@ -45,7 +45,8 @@ decisionOrder space open = map (map snd) (groupBy (\a b -> fst a == fst b) (go N
       where
         ready = [r | r <- Set.toList remaining, all (`Set.notMember` remaining) (filter (/= r) (raisers r))]
         candidates = if null ready then Set.toList remaining else ready
-        q = minimumBy (comparing (\r -> (Down (Map.findWithDefault 0 r weight), current /= Just (blockOf Map.! r), r))) candidates
+        q =
+          minimumBy (comparing (\r -> (Down (Map.findWithDefault 0 r weight), current /= Just (blockOf Map.! r), r))) candidates
         b = blockOf Map.! q
 
 -- | Returns each question's block: the least question it is joined to
@@ -57,4 +58,9 @@ components qs groups = Map.fromList [(q, Set.findMin block) | block <- blocks, q
     graph =
       Graph.buildG
         (0, Set.size qs - 1)
-        [(a, b) | g <- groups, let members = [Set.findIndex q qs | q <- Set.toList (Set.intersection g qs)], a <- take 1 members, b <- members]
+        [ (a, b)
+        | g <- groups
+        , let members = [Set.findIndex q qs | q <- Set.toList (Set.intersection g qs)]
+        , a <- take 1 members
+        , b <- members
+        ]

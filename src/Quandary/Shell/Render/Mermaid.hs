@@ -48,7 +48,8 @@ forbidNodes n f =
     ++ ["  f" <> Render.tshow n <> " -. " <> side l <> " .- " <> optionNode (optionOf l) | l <- f.literals]
 
 classDef :: Verdict -> Text
-classDef v = "  classDef " <> Render.verdictText v <> " fill:" <> c.fill <> ",stroke:" <> c.stroke <> maybe "" (",color:" <>) c.font
+classDef v =
+  "  classDef " <> Render.verdictText v <> " fill:" <> c.fill <> ",stroke:" <> c.stroke <> maybe "" (",color:" <>) c.font
   where
     c = colours v
 
