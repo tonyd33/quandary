@@ -9,16 +9,18 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TextIO
 import Data.Text.Lazy qualified as LazyText
-import Fixtures (fixture, listed, withCopy)
+import Fixtures (fixture, listed, other, withCopy)
 import Lucid (renderBS, renderText)
 import Network.HTTP.Types (Status (..), decodePath, hLocation, parseQuery, status200, status303, status403, status404)
 import Network.Wai (defaultRequest, pathInfo, queryString, requestHeaderHost, responseHeaders, responseStatus)
 import Network.Wai.Internal (ResponseReceived (..))
-import Quandary.Core.Analyse (Analysis (..))
+import Quandary.Core.Analyse (Analysis (..), Cause (..))
+import Quandary.Core.Compile (Constraint (..))
 import Quandary.Core.Rulings (EditError (..))
 import Quandary.Core.Types
 import Quandary.Core.View
-  ( Objection (..)
+  ( Dead (..)
+  , Objection (..)
   , OptionRow (..)
   , OptionView (..)
   , PointView (..)
@@ -61,6 +63,10 @@ routes =
       , OptionAt "current" "sync/git"
       , OptionAt "current" "sync/how.other"
       , Points
+      , GraphAt "current" HideDead
+      , GraphAt "current" ShowDead
+      , BoxAt "current" HideDead
+      , BoxAt "current" ShowDead
       , WhatifAt "edit-offline" []
       , WhatifAt
           "current"
@@ -77,6 +83,9 @@ parsed = uncurry (route "current") . decodePath . Text.encodeUtf8
 
 drawnAt :: Route -> IO Drawn
 drawnAt r = withLive fixture (`page` r)
+
+htmlAt :: Route -> IO Text.Text
+htmlAt r = LazyText.toStrict . renderText . document r <$> drawnAt r
 
 pageAt :: Route -> IO Page
 pageAt r =
@@ -101,8 +110,23 @@ pages =
       pageAt (OptionAt "current" "sync/crdt") >>= \case
         OptionPage v -> do
           (v.question.id, v.row.verdict) @?= (Id "sync/how", Just Impossible)
-          v.causes @?= [Set.singleton (Take (listed "store/files"))]
+          map (.rulings) v.causes @?= [Set.singleton (Take (listed "store/files"))]
         _ -> assertFailure "not an option page"
+  , testCase "an impossible option's page gives the constraints each set of rulings works through" $
+      pageAt (OptionAt "current" "sync/crdt") >>= \case
+        OptionPage v ->
+          map (.constraints) v.causes
+            @?= [
+                  [ Needs (listed "sync/crdt") (listed "store/sqlite")
+                  , AtMostOne (Id "store/where") [listed "store/files", listed "store/sqlite", other "store/where"]
+                  ]
+                ]
+        _ -> assertFailure "not an option page"
+  , testCase "an option page draws each cause and states its constraints" $ do
+      out <- htmlAt (OptionAt "current" "sync/crdt")
+      assertBool "graph node" ("\"id\":\"o:store/sqlite\"" `Text.isInfixOf` out)
+      assertBool "ruled node" ("\"label\":\"accept files\"" `Text.isInfixOf` out)
+      assertBool "sentence" ("takes at most one option" `Text.isInfixOf` out)
   , testCase "an option defeated for no other cause has no causes" $
       pageAt (OptionAt "current" "sync/lww") >>= \case
         OptionPage v -> (v.row.verdict, v.causes) @?= (Just Impossible, [])
@@ -174,15 +198,36 @@ html =
       let r = QuestionAt "current" (Id "sync/how")
       renderBS . document r <$> drawnAt r
   , testCase "the graph page holds each question and option, linked to its page" $ do
-      let r = GraphAt "current"
-      out <- LazyText.toStrict . renderText . document r <$> drawnAt r
+      out <- htmlAt (GraphAt "current" ShowDead)
       assertBool "question node" ("\"id\":\"q:sync/how\"" `Text.isInfixOf` out)
       assertBool "option node" ("\"href\":\"/p/current/o/sync/lww\"" `Text.isInfixOf` out)
+      assertBool "dormant question" ("\"id\":\"q:store/editors\"" `Text.isInfixOf` out)
+  , testCase "the graph hides dormant questions and impossible options unless asked" $ do
+      out <- htmlAt (GraphAt "current" HideDead)
+      assertBool "possible option" ("\"id\":\"o:sync/git\"" `Text.isInfixOf` out)
+      assertBool "impossible option" (not ("\"id\":\"o:sync/lww\"" `Text.isInfixOf` out))
+      assertBool "dormant question" (not ("q:store/editors" `Text.isInfixOf` out))
+  , testCase "the graph carries an option's constraints on its node, not as edges" $ do
+      out <- htmlAt (GraphAt "current" HideDead)
+      assertBool (Text.unpack out) ("\"constraints\":[[\"needs\",\"o:store/files\"]]" `Text.isInfixOf` out)
+  , testCase "the box lists each live question's live options with their constraints" $ do
+      out <- htmlAt (BoxAt "current" HideDead)
+      assertBool "question row" ("data-key=\"q:sync/how\"" `Text.isInfixOf` out)
+      assertBool "possible option" ("data-key=\"o:sync/git\" data-needs=\"o:store/files\"" `Text.isInfixOf` out)
+      assertBool "raised question" ("data-raises=\"q:conflict/shown q:sync/merge-conflicts\"" `Text.isInfixOf` out)
+      assertBool "impossible option" (not ("o:sync/lww" `Text.isInfixOf` out))
+      assertBool "dormant question" (not ("q:store/editors" `Text.isInfixOf` out))
+  , testCase "the box shows dead parts when asked" $ do
+      out <- htmlAt (BoxAt "current" ShowDead)
+      assertBool "impossible option" ("data-key=\"o:sync/lww\"" `Text.isInfixOf` out)
+      assertBool "dormant question" ("data-key=\"q:store/editors\"" `Text.isInfixOf` out)
   , testCase "a title cannot close the graph's script" $ withCopy $ \dir -> do
       let file = dir </> "questions/sync/how.md"
       TextIO.readFile file
         >>= TextIO.writeFile file . Text.replace "title: How devices sync" "title: How </script> devices sync"
-      out <- LazyText.toStrict . renderText . document (GraphAt "current") <$> withLive dir (`page` GraphAt "current")
+      out <-
+        LazyText.toStrict . renderText . document (GraphAt "current" HideDead)
+          <$> withLive dir (`page` GraphAt "current" HideDead)
       assertBool (Text.unpack out) ("How \\u003c/script> devices sync" `Text.isInfixOf` out)
   , testCase "a body's raw HTML is dropped" $ do
       let out =

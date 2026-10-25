@@ -10,6 +10,7 @@ import Data.ByteString.Builder (byteString)
 import Data.ByteString.Char8 qualified as Char8
 import Data.ByteString.Lazy qualified as Lazy
 import Data.Char (isDigit, isHexDigit)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
@@ -17,6 +18,7 @@ import Lucid (Html, renderBS)
 import Network.HTTP.Types
 import Network.Wai
 import Quandary.Core.Types
+import Quandary.Core.View (Dead (..))
 import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
 import Quandary.Shell.Render.Html (document, link, titledDocument)
@@ -48,7 +50,7 @@ redirect r = responseLBS status303 [(hContentType, "text/html; charset=utf-8"), 
 
 served :: (ByteString, ByteString) -> Response
 served (mediaType, content) =
-  responseLBS status200 [(hContentType, mediaType), (hCacheControl, "max-age=86400")] (Lazy.fromStrict content)
+  responseLBS status200 [(hContentType, mediaType), (hCacheControl, "no-cache")] (Lazy.fromStrict content)
 
 plain :: Status -> ByteString -> Response
 plain s t = responseLBS s [(hContentType, "text/plain; charset=utf-8")] (Lazy.fromStrict t)
@@ -104,8 +106,15 @@ route _ ["p", p] _ = Just (StatusAt p)
 route _ ("p" : p : "q" : i@(_ : _)) _ = Just (QuestionAt p (Id (Text.intercalate "/" i)))
 route _ ("p" : p : "o" : i@(_ : _)) _ = Just (OptionAt p (Text.intercalate "/" i))
 route _ ["p", p, "whatif"] q = WhatifAt p <$> traverse supposition q
-route _ ["p", p, "graph"] _ = Just (GraphAt p)
+route _ ["p", p, "graph"] q = Just (GraphAt p (dead q))
+route _ ["p", p, "box"] q = Just (BoxAt p (dead q))
 route _ _ _ = Nothing
+
+-- | Returns whether the query asks for dead parts too, with `all`.
+dead :: Query -> Dead
+dead q
+  | isJust (lookup "all" q) = ShowDead
+  | otherwise = HideDead
 
 supposition :: QueryItem -> Maybe (Verb, Text)
 supposition (k, Just v) = do

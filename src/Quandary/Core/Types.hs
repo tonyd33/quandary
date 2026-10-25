@@ -118,7 +118,7 @@ data Forbid = Forbid
   { literals :: Set Literal
   , why :: Maybe Text
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 data Link = Link
   { rel :: Text

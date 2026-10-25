@@ -18,6 +18,8 @@ module Quandary.Core.Analyse
   , topGrade
   , whyAll
   , causes
+  , Cause (..)
+  , explain
   , edit
   , whatif
   , Supposition (..)
@@ -48,7 +50,8 @@ import Data.Ord (Down (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Quandary.Core.Compile (compile)
+import Quandary.Core.Compile (Constraint, compile)
+import Quandary.Core.Compile qualified as Compile
 import Quandary.Core.Rulings
 import Quandary.Core.Solver
 import Quandary.Core.Types
@@ -508,6 +511,39 @@ causes (Solver solving) m name o v = solving (compile m.space) (\query -> causes
 
 causesIn :: Monad m => Query OptionId m -> Model -> Text -> OptionId -> Verdict -> m [Set Literal]
 causesIn query m name o v = conflicts query (rulingsOf m.points name) (Set.singleton (opposing o v))
+
+-- | A set of rulings giving an option its verdict, and a minimal set of the
+-- space's constraints under which those rulings give it.
+data Cause = Cause
+  { rulings :: Set Literal
+  , constraints :: [Constraint]
+  }
+  deriving (Eq, Show)
+
+-- | A variable of the explanation formula: a taken option, or a
+-- constraint's selector. Each constraint holds only while its selector is
+-- taken.
+data Selected = Picked OptionId | Active Constraint
+  deriving (Eq, Ord, Show)
+
+-- | Returns each set of rulings giving the option the verdict, with a
+-- minimal set of the space's constraints under which no design holds those
+-- rulings and gives the option another verdict.
+explain :: Monad m => Solver m -> Space -> OptionId -> Verdict -> [Set Literal] -> m [Cause]
+explain (Solver solving) space o v rss = solving (selecting space cs) (\query -> forM rss (\rs -> Cause rs <$> constraintCore query rs))
+  where
+    cs = Compile.constraints space
+    selectors = Set.fromList [Take (Active c) | (c, _) <- cs]
+    constraintCore query rs = do
+      found <- core query selectors (Set.map (fmap Picked) (Set.insert (opposing o v) rs))
+      pure [c | Take (Active c) <- foldMap Set.toList found]
+
+selecting :: Space -> [(Constraint, [Set Literal])] -> Formula Selected
+selecting space cs =
+  Formula
+    { variables = Set.map Picked (Compile.options space) <> Set.fromList [Active c | (c, _) <- cs]
+    , forbidden = Set.fromList [Set.insert (Take (Active c)) (Set.map (fmap Picked) ls) | (c, lss) <- cs, ls <- lss]
+    }
 
 -- | Returns the literal no design holds when the option has the verdict.
 opposing :: OptionId -> Verdict -> Literal

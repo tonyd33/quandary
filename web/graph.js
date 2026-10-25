@@ -1,24 +1,14 @@
 // Questions start collapsed. A click on an option, or a double click on a
 // question, opens its page; a click on a question expands or collapses it.
+// Only raising edges are laid out. Constraint edges are drawn after each
+// layout, for the hovered option or for every option, ending at the
+// option's question when that question is collapsed.
 const elements = JSON.parse(document.getElementById('elements').textContent);
-const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const cy = cytoscape({
   container: document.getElementById('graph'),
   elements,
   wheelSensitivity: 0.3,
-  style: [
-    { selector: 'node', style: { label: 'data(label)', color: cssVar('--fg'), 'font-size': 11, 'text-wrap': 'wrap', 'text-max-width': 220, 'text-valign': 'center', shape: 'round-rectangle', width: 'label', height: 'label', padding: 6, 'background-color': cssVar('--bg'), 'border-width': 1, 'border-color': cssVar('--muted') } },
-    { selector: 'node.question', style: { 'text-valign': 'top', 'font-weight': 600, 'background-color': cssVar('--panel'), 'border-color': cssVar('--question') } },
-    { selector: 'node.question.cy-expand-collapse-collapsed-node', style: { 'text-valign': 'center' } },
-    { selector: 'node.forced', style: { 'background-color': cssVar('--forced-bg'), 'border-color': cssVar('--forced') } },
-    { selector: 'node.possible', style: { 'background-color': cssVar('--possible-bg'), 'border-color': cssVar('--possible') } },
-    { selector: 'node.impossible', style: { 'background-color': cssVar('--impossible-bg'), 'border-color': cssVar('--impossible'), color: cssVar('--impossible') } },
-    { selector: 'node.joint', style: { shape: 'ellipse', 'font-size': 9 } },
-    { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', width: 1, 'line-color': cssVar('--muted'), 'target-arrow-color': cssVar('--muted') } },
-    { selector: 'edge.needs-one-of', style: { 'line-style': 'dotted' } },
-    { selector: 'edge.excludes', style: { 'line-style': 'dashed', 'line-color': cssVar('--stale'), 'target-arrow-color': cssVar('--stale'), 'target-arrow-shape': 'tee' } },
-    { selector: ':selected', style: { 'border-width': 3 } }
-  ]
+  style: graphStyle()
 });
 const layout = { name: 'dagre', rankDir: 'LR', nodeSep: 12, rankSep: 70, animate: false, fit: false };
 const expandCollapse = cy.expandCollapse({ layoutBy: layout, fisheye: false, animate: false, undoable: false, cueEnabled: false });
@@ -47,6 +37,32 @@ cy.layout({ ...layout, stop: () => { fitReadably(); focusHash(); } }).run();
 window.addEventListener('hashchange', focusHash);
 window.addEventListener('resize', () => cy.resize());
 const open = e => { location.href = e.target.data('href'); };
+let everyConstraint = false;
+const options = elements.filter(e => e.data.constraints);
+const shownNode = key => {
+  const n = cy.getElementById(key);
+  return n.nonempty() ? n : cy.getElementById(parents.get(key) || '');
+};
+const drawConstraints = hovered => {
+  cy.remove('edge.constraint');
+  const drawn = [];
+  for (const o of options) for (const [cls, target] of o.data.constraints) {
+    if (!everyConstraint && hovered !== o.data.id && hovered !== target) continue;
+    const from = shownNode(o.data.id), to = shownNode(target);
+    if (from.empty() || to.empty() || from.same(to)) continue;
+    drawn.push({ group: 'edges', data: { source: from.id(), target: to.id() }, classes: 'constraint ' + cls });
+  }
+  cy.add(drawn);
+};
+cy.on('expandcollapse.beforecollapse expandcollapse.beforeexpand', () => cy.remove('edge.constraint'));
+cy.on('layoutstop', () => drawConstraints(null));
+cy.on('mouseover', 'node.option', e => drawConstraints(e.target.id()));
+cy.on('mouseout', 'node.option', () => drawConstraints(null));
+document.getElementById('constraints').onclick = e => {
+  everyConstraint = !everyConstraint;
+  e.target.classList.toggle('on', everyConstraint);
+  drawConstraints(null);
+};
 cy.on('tap', 'node.option', open);
 cy.on('dbltap', 'node.question', open);
 cy.on('tap', 'node.question', e => { const n = e.target; if (expandCollapse.isExpandable(n)) expandCollapse.expand(n); else if (expandCollapse.isCollapsible(n)) expandCollapse.collapse(n); });

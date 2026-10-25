@@ -6,6 +6,7 @@ module Gen
   , specialize
   , designs
   , directlyValid
+  , directlyKeeps
   , designsReaching
   )
 where
@@ -18,7 +19,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Fixtures (listed, option, other, question, spaceOf)
-import Quandary.Core.Compile (compile)
+import Quandary.Core.Compile (Constraint (..), compile)
 import Quandary.Core.Types
 import Test.QuickCheck
 
@@ -160,6 +161,21 @@ directlyValid space d = all holds (Map.elems space.questions)
                && not (any taken o.excludes)
                && maybe True (any taken) o.needsOneOf
            )
+
+-- | Decide whether the design keeps one constraint, from the semantics'
+-- prose.
+directlyKeeps :: Constraint -> Set Literal -> Bool
+directlyKeeps c d = case c of
+  Needs o p -> not (taken o) || taken p
+  Excludes o p -> not (taken o && taken p)
+  NeedsOneOf o ps -> not (taken o) || any taken ps
+  RaisedFirst _ os rs -> live rs || not (any taken os)
+  AtMostOne _ os -> length (filter taken os) <= 1
+  AtLeastOne _ os rs -> not (null rs || live rs) || any taken os
+  Forbidden _ f -> not (all (`Set.member` d) f.literals)
+  where
+    taken o = Set.member (Take o) d
+    live = any (all taken)
 
 -- | Returns every valid design holding the rulings.
 designsReaching :: Space -> Set Literal -> [Set Literal]

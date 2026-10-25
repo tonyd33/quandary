@@ -307,6 +307,6 @@ rendering =
   where
     spaceGraph m = do
       a <- analyse cadical m "current"
-      pure (Graph.build m.space ((.verdicts) <$> standing a))
+      pure (Graph.build m.space (standing a))
     golden name render =
       goldenVsString name ("test/golden/" <> name <> ".txt") (Lazy.fromStrict . Text.encodeUtf8 <$> (model >>= render))

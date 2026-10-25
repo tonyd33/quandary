@@ -13,6 +13,12 @@ module Quandary.Core.View
   , Choices (..)
   , Choice (..)
   , Whatif (..)
+  , Dead (..)
+  , hidesQuestion
+  , hidesOption
+  , BoxGroup (..)
+  , BoxRow (..)
+  , Cell (..)
   , questionView
   , questionViewFrom
   , optionView
@@ -20,6 +26,7 @@ module Quandary.Core.View
   , statusBounds
   , statusGroups
   , choicesAt
+  , boxGroups
   , pointViews
   , whatifFacts
   )
@@ -177,7 +184,7 @@ data OptionView = OptionView
   , question :: Question
   , analysis :: Analysis
   , row :: OptionRow
-  , causes :: [Set Literal]
+  , causes :: [Cause]
   -- ^ Empty when the option's own ruling is the only cause.
   }
 
@@ -187,14 +194,23 @@ optionView :: Monad m => Solver m -> Model -> Text -> Analysis -> Question -> Op
 optionView solver m name a q o = do
   (bs, cs) <- boundsAndCausesAt solver m name a q o
   let row = optionRow m name (preferenceAt m.points name) a bs o
+  explained <- explainAt solver m row (beyondOwnRuling row cs)
   pure
     OptionView
       { point = name
       , question = q
       , analysis = a
       , row
-      , causes = beyondOwnRuling row cs
+      , causes = explained
       }
+
+-- | Returns each set of rulings giving the row's option its verdict, with
+-- the constraints under which they give it.
+explainAt :: Monad m => Solver m -> Model -> OptionRow -> [Set Literal] -> m [Cause]
+explainAt _ _ _ [] = pure []
+explainAt solver m row cs = case row.verdict of
+  Just v -> explain solver m.space row.option v cs
+  Nothing -> pure []
 
 -- | Returns the bounds of the question's options when the option is
 -- possible or forced, and every set of rulings making it forced or
@@ -275,6 +291,55 @@ choicesAt m name bs s q =
     shown = case filter (/= Other q.id) possibleOptions of
       several@(_ : _ : _) -> several
       _ -> possibleOptions
+
+-- | Whether a view leaves out dormant questions and impossible options.
+data Dead = HideDead | ShowDead
+  deriving (Eq, Ord, Show)
+
+-- | Holds when the view leaves out a question in the state.
+hidesQuestion :: Dead -> Maybe QuestionState -> Bool
+hidesQuestion HideDead (Just Dormant) = True
+hidesQuestion _ _ = False
+
+-- | Holds when the view leaves out an option with the verdict.
+hidesOption :: Dead -> Maybe Verdict -> Bool
+hidesOption HideDead (Just Impossible) = True
+hidesOption _ _ = False
+
+-- | A status group with every option of each of its questions.
+data BoxGroup = BoxGroup
+  { kind :: GroupKind
+  , rows :: [BoxRow]
+  }
+
+data BoxRow = BoxRow
+  { question :: Question
+  , cells :: [Cell]
+  -- ^ By preference at the point.
+  }
+
+data Cell = Cell
+  { option :: OptionId
+  , title :: Maybe Text
+  , verdict :: Verdict
+  , rank :: Maybe Rank
+  , ruling :: Maybe (Literal, Text, Ruling)
+  }
+
+-- | Returns every status group holding a question the view shows, each
+-- question with the options it shows.
+boxGroups :: Model -> Text -> Dead -> Standing -> [BoxGroup]
+boxGroups m name dead s =
+  [ BoxGroup g.kind rows
+  | g <- statusGroups m name Map.empty s
+  , let rows = [row e.question | e <- g.entries, not (hidesQuestion dead (Map.lookup e.question.id s.states))]
+  , not (null rows)
+  ]
+  where
+    ranks = preferenceAt m.points name
+    rulings = effective m.points name
+    row q = BoxRow q [cell o | o <- byPreference ranks q, not (hidesOption dead (Map.lookup o s.verdicts))]
+    cell o = Cell o (titleOf m.space o) (s.verdicts Map.! o) (Map.lookup o ranks) (Map.lookup o rulings)
 
 -- | Returns every point, given the stale ones.
 pointViews :: Model -> Set Text -> [PointView]

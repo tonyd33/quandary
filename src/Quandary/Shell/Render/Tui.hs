@@ -129,7 +129,8 @@ pageWidget f parsed d = case d.shown of
     QuestionPage v -> questionWidget f parsed m.space v
     OptionPage v -> optionWidget f parsed m v
     PointsPage ps -> body "points" BodyView (pointsWidget ps)
-    GraphPage _ _ -> framed "graph" (padRight Max (padLeftRight 1 (txtWrap "serve draws the graph")))
+    GraphPage {} -> framed "graph" (padRight Max (padLeftRight 1 (txtWrap "serve draws the graph")))
+    BoxPage {} -> framed "box" (padRight Max (padLeftRight 1 (txtWrap "serve draws the box")))
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
     NotFound t -> framed "not found" (padRight Max (padLeftRight 1 (txtWrap t)))
   where

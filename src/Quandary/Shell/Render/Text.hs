@@ -5,6 +5,8 @@ module Quandary.Shell.Render.Text
   , showOption
   , optionTitle
   , optionFacts
+  , constraintChunks
+  , rulingVerb
   , rulingSummary
   , valueChunks
   , choiceNote
@@ -14,6 +16,8 @@ module Quandary.Shell.Render.Text
   , Because (..)
   , RulingSet (..)
   , optionCauses
+  , Explained (..)
+  , explained
   , raisersChunks
   , coRaisers
   , ruled
@@ -72,6 +76,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Quandary.Core.Analyse
 import Quandary.Core.Analyse qualified as Analyse
+import Quandary.Core.Compile (Constraint (..))
 import Quandary.Core.Rulings
 import Quandary.Core.Source
 import Quandary.Core.Types
@@ -282,7 +287,7 @@ columns rows = [Text.stripEnd (mconcat (zipWith (\w c -> Text.justifyLeft w ' ' 
     widths = map ((+ 2) . maximum . map Text.length) (transpose rows)
 
 -- | A piece of a line: words, an option, or a rank.
-data Chunk = Words Text | Named OptionId | Ranked Rank
+data Chunk = Words Text | Named OptionId | Asked Id | Ranked Rank
 
 -- | Returns the chunks as text, each option by its id, each rank in
 -- brackets.
@@ -292,6 +297,7 @@ plain = foldMap chunkText
 chunkText :: Chunk -> Text
 chunkText (Words t) = t
 chunkText (Named o) = optionName o
+chunkText (Asked q) = idText q
 chunkText (Ranked n) = "[" <> tshow (rankValue n) <> "]"
 
 -- | Returns the words as a piece, none when they are empty.
@@ -309,6 +315,24 @@ raisersChunks = intercalate [Words ", "] . map raiserChunks
 -- | Returns the options a raiser takes together, joined by `with`.
 raiserChunks :: NonEmpty OptionId -> [Chunk]
 raiserChunks g = intersperse (Words " with ") (map Named (toList g))
+
+-- | Returns the constraint as a sentence, each option and question named.
+constraintChunks :: Constraint -> [Chunk]
+constraintChunks (Needs o p) = [Named o, Words " needs ", Named p]
+constraintChunks (Excludes o p) = [Named o, Words " excludes ", Named p]
+constraintChunks (NeedsOneOf o ps) = [Named o, Words " needs one of "] ++ intercalate [Words ", "] [[Named p] | p <- toList ps]
+constraintChunks (RaisedFirst q _ rs) = [Asked q, Words " takes an option only once raised, by "] ++ raisersChunks rs
+constraintChunks (AtMostOne q _) = [Asked q, Words " takes at most one option"]
+constraintChunks (AtLeastOne q _ []) = [Asked q, Words " takes an option"]
+constraintChunks (AtLeastOne q _ _) = [Asked q, Words " takes an option once raised"]
+constraintChunks (Forbidden q f) =
+  [Asked q, Words " forbids "]
+    ++ intercalate [Words " with "] (map forbiddenChunks (Set.toList f.literals))
+    ++ maybe [] (\t -> [Words (": " <> t)]) f.why
+
+forbiddenChunks :: Literal -> [Chunk]
+forbiddenChunks (Take o) = [Words "taking ", Named o]
+forbiddenChunks (Refuse o) = [Words "refusing ", Named o]
 
 -- | Returns the option's rank in brackets, or nothing when unranked.
 rankText :: Maybe Rank -> Text
@@ -542,7 +566,7 @@ lineOf cs = [plain cs]
 -- is the only cause.
 optionCauses :: Model -> OptionView -> Maybe Because
 optionCauses m v = case v.row.verdict of
-  Just verdict | not (null v.causes) -> Just (because m v.point (verdictText verdict) verdict v.row.option v.causes)
+  Just verdict | not (null v.causes) -> Just (because m v.point (verdictText verdict) verdict v.row.option (map (.rulings) v.causes))
   _ -> Nothing
 
 -- | Returns the ruling's verb, the point it comes from unless that is the
@@ -597,9 +621,30 @@ data RulingSet = RulingSet
 because :: Model -> Text -> Text -> Verdict -> OptionId -> [Set Literal] -> Because
 because _ _ opening _ _ [] = Sets [RulingSet opening []]
 because m name opening v o cores
-  | any Set.null cores =
-      Regardless [Words ("no valid design " <> designVerb v <> " "), Named o, Words ", whatever the rulings"]
+  | any Set.null cores = Regardless (regardless v o)
   | otherwise = Sets (conflicts m name (opening <> " because of:") "and because of:" cores)
+
+regardless :: Verdict -> OptionId -> [Chunk]
+regardless v o = [Words ("no valid design " <> designVerb v <> " "), Named o, Words ", whatever the rulings"]
+
+-- | A cause of an option's verdict: its heading, its rulings, and the
+-- constraints giving the verdict with them.
+data Explained = Explained
+  { heading :: [Chunk]
+  , rulings :: [[Chunk]]
+  , cause :: Cause
+  }
+
+-- | Returns each cause of the option's verdict under its heading.
+explained :: Model -> OptionView -> [Explained]
+explained m v = case v.row.verdict of
+  Just verdict -> zipWith (explainedUnder verdict) (opening verdict : repeat "and because of:") v.causes
+  Nothing -> []
+  where
+    opening verdict = verdictText verdict <> " because of:"
+    explainedUnder verdict h c
+      | Set.null c.rulings = Explained (regardless verdict v.row.option) [] c
+      | otherwise = Explained [Words h] (map (rulingChunks m v.point) (Set.toList c.rulings)) c
 
 becauseLines :: Because -> [Text]
 becauseLines (Regardless cs) = [plain cs]

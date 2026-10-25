@@ -2,6 +2,7 @@ module Properties (properties) where
 
 import BruteForce (bruteForce, bruteForceOn)
 import Control.Monad (forM)
+import Data.Functor.Identity (runIdentity)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -10,6 +11,7 @@ import Gen
 import Quandary.Core.Analyse
   ( Analysis (..)
   , Bounds (..)
+  , Cause (..)
   , Implication (..)
   , Moved (..)
   , QuestionState (..)
@@ -17,11 +19,13 @@ import Quandary.Core.Analyse
   , Supposition (..)
   , analyse
   , bounds
+  , causes
   , dominance
+  , explain
   , implications
   , whatif
   )
-import Quandary.Core.Compile (compile)
+import Quandary.Core.Compile (compile, constraints)
 import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Core.View (OptionView (..), QuestionView (..), optionView, questionView, statusBounds)
@@ -68,6 +72,42 @@ properties =
                         , property (not (reaching (Set.insert (Take o) e)))
                         , conjoin [property (reaching (Set.insert (Take o) (Set.delete l e))) | l <- Set.toList e]
                         ]
+    , testProperty "each constraint forbids what the prose says it does, and together they are validity" $
+        forAll genSpace $ \space ->
+          conjoin
+            [ counterexample (show (c, d)) (not (any (`Set.isSubsetOf` d) lss) === directlyKeeps c d)
+            | (c, lss) <- constraints space
+            , d <- designs space
+            ]
+            .&&. conjoin
+              [ counterexample (show d) (all (\(c, _) -> directlyKeeps c d) (constraints space) === directlyValid space d)
+              | d <- designs space
+              ]
+    , testProperty "an explanation is a minimal set of constraints leaving no design" $
+        forAll genSpace $ \space ->
+          forAll (genPoint space) $ \p ->
+            forAll (elements (Set.toList (compile space).variables)) $ \o ->
+              let m = modelAt space p
+                  noDesign cs ls = not (any (\d -> ls `Set.isSubsetOf` d && all (\c -> directlyKeeps c d) cs) (designs space))
+                  opposing Forced = Refuse o
+                  opposing _ = Take o
+               in case bruteForceOn (compile space) (`consequences` p) of
+                    Stale -> discard
+                    Reaches vs -> case vs Map.! o of
+                      Possible -> discard
+                      v -> runIdentity $ do
+                        rss <- causes bruteForce m "current" o v
+                        found <- explain bruteForce space o v rss
+                        pure $
+                          conjoin
+                            [ counterexample (show c) $
+                                noDesign c.constraints (Set.insert (opposing v) c.rulings)
+                                  .&&. conjoin
+                                    [ property (not (noDesign (filter (/= k) c.constraints) (Set.insert (opposing v) c.rulings)))
+                                    | k <- c.constraints
+                                    ]
+                            | c <- found
+                            ]
     , testProperty "bounds are the best design taking each option" $
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->

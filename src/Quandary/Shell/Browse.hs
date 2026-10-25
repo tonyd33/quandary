@@ -74,7 +74,8 @@ data Route
   | OptionAt Text Text
   | Points
   | WhatifAt Text [(Verb, Text)]
-  | GraphAt Text
+  | GraphAt Text Dead
+  | BoxAt Text Dead
   deriving (Eq, Ord, Show)
 
 -- | Returns the point the route is at, `current` for the points.
@@ -84,7 +85,8 @@ routePoint (QuestionAt p _) = p
 routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
 routePoint (WhatifAt p _) = p
-routePoint (GraphAt p) = p
+routePoint (GraphAt p _) = p
+routePoint (BoxAt p _) = p
 
 routeTitle :: Route -> Text
 routeTitle (StatusAt p) = "point " <> p
@@ -92,7 +94,8 @@ routeTitle (QuestionAt p q) = idText q <> " at " <> p
 routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
 routeTitle (WhatifAt p _) = "whatif at " <> p
-routeTitle (GraphAt p) = "graph at " <> p
+routeTitle (GraphAt p _) = "graph at " <> p
+routeTitle (BoxAt p _) = "box at " <> p
 
 data Page
   = StatusPage Text Analysis (Map OptionId Bounds) (Set Text)
@@ -100,7 +103,8 @@ data Page
   | OptionPage OptionView
   | PointsPage [PointView]
   | WhatifPage Text [Supposition] (Either EditError Whatif)
-  | GraphPage Text Graph.Graph
+  | GraphPage Text Dead Graph.Graph
+  | BoxPage Text Dead Analysis
   | NotFound Text
 
 newtype Revision = Revision Int
@@ -234,9 +238,10 @@ build b (OptionAt p t) = atPoint b.model p $ case Resolve.optionWithQuestion b.m
   Just (q, o) -> do
     a <- analysisAt b p
     OptionPage <$> View.optionView cadical b.model p a q o
-build b (GraphAt p) = atPoint b.model p $ do
+build b (GraphAt p dead) = atPoint b.model p $ do
   a <- analysisAt b p
-  pure (GraphPage p (Graph.build b.model.space ((.verdicts) <$> standing a)))
+  pure (GraphPage p dead (Graph.shown dead (Graph.build b.model.space (standing a))))
+build b (BoxAt p dead) = atPoint b.model p (BoxPage p dead <$> analysisAt b p)
 build b Points = PointsPage . View.pointViews b.model <$> staleNames b
 build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
   Left t -> pure (NotFound ("unknown id " <> t))
