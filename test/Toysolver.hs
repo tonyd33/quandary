@@ -6,7 +6,7 @@ import ToySolver.SAT qualified as SAT
 
 -- | Answers from a CDCL solver, one per session.
 toysolver :: Solver IO
-toysolver = fromSat Sat {withClauses = session}
+toysolver = fromSat Sat {withClauses = session, width = 1, parallel = sequence}
 
 -- | Run solves on a fresh solver holding the clauses.
 session :: Int -> [[Int]] -> (Solve IO -> IO a) -> IO a

@@ -20,6 +20,7 @@
 - `whatif accept` now lists every question the accepted options raise, with the bounds of its possible options at the point the acceptance reaches.
 - `why` and `show OPTION` now list, under each set of rulings making the option forced or impossible, a minimal set of the space's constraints that with those rulings gives the verdict.
 - Ruling commands now wait for one another on `.quandary/rulings.lock`, saying so after a second, and replace point files whole. Two rulings at once both land, and a reader never sees half a file.
+- Commands load a space and answer queries faster: on a space of 250 question files, `show` and `why` take about 40% less time and `status` about 75% less, now that it bounds options on every core.
 
 ### Bug Fixes
 

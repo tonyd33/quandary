@@ -49,7 +49,7 @@ agrees name solver =
     ]
 
 session :: Solver m -> Formula OptionId -> (Query OptionId m -> m a) -> m a
-session (Solver solving) = solving
+session Solver {solving} = solving
 
 -- | Returns the verdicts by enumerating every design the prose admits.
 enumerated :: Space -> Set.Set Literal -> Consequences

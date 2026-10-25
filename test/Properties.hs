@@ -34,6 +34,10 @@ import Test.Tasty
 import Test.Tasty.QuickCheck
 import Toysolver (toysolver)
 
+-- | Returns the solver running three sessions at once.
+threeWide :: Solver m -> Solver m
+threeWide Solver {solving, parallel} = Solver {solving, width = 3, parallel}
+
 properties :: TestTree
 properties =
   testGroup
@@ -112,7 +116,7 @@ properties =
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
             consistent p ==>
-              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
+              ioProperty . fmap conjoin . forM [toysolver, cadical, threeWide cadical] $ \solver ->
                 analyse solver (modelAt space p) "current" >>= \case
                   StaleAt _ -> pure (bestDesigns space p === Map.empty)
                   Fresh s -> (=== bestDesigns space p) <$> bounds solver (modelAt space p) "current" s (Set.toList (compile space).variables)

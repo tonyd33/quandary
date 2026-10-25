@@ -56,7 +56,7 @@ notesSync =
       m <- modelOf fixture
       let rulings = rulingsOf m.points "current"
           f = compile m.space
-      (case cadical of Solver solving -> solving f (\q -> consequences q rulings)) >>= \case
+      (case cadical of Solver {solving} -> solving f (\q -> consequences q rulings)) >>= \case
         Stale -> assertFailure "stale"
         Reaches vs -> do
           Map.lookup (Listed (Id "store/sqlite")) vs @?= Just Impossible

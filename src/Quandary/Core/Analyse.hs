@@ -91,7 +91,7 @@ data Standing = Standing
   deriving (Eq, Show)
 
 analyse :: Monad m => Solver m -> Model -> Text -> m Analysis
-analyse (Solver solving) m name = solving f $ \query ->
+analyse Solver {solving} m name = solving f $ \query ->
   consequences query rulings >>= \case
     Stale -> StaleAt <$> conflicts query rulings Set.empty
     Reaches verdicts -> Fresh . Standing verdicts <$> states query verdicts
@@ -110,7 +110,7 @@ analyse (Solver solving) m name = solving f $ \query ->
           | Set.member q.id deferred = Deferred
           | otherwise = Open (openness verdicts q)
         dead r = isNothing <$> underRulings (Set.fromList (map Take (toList r))) Set.empty
-        underRulings = query.design rulings
+        underRulings = design query rulings
         closed q = case q.pick of
           One -> not (null (taken verdicts q))
           _ -> all (\o -> Map.lookup o verdicts /= Just Possible) (choices q)
@@ -166,34 +166,39 @@ data Var
 -- commitments it takes; an unverified grade counts toward the upper bound
 -- only.
 bounds :: Monad m => Solver m -> Model -> Text -> Standing -> [OptionId] -> m (Map OptionId Bounds)
-bounds (Solver solving) m name s targets
+bounds Solver {solving, width, parallel} m name s targets
   | null m.space.grades || null targets = pure Map.empty
-  | otherwise = solving formula each
+  | otherwise = Map.unions <$> parallel [solving formula (`each` chunk) | chunk <- dealt width targets]
   where
-    (formula, each) = bounding m name s targets
+    (formula, each) = bounding m name s
+
+-- | Returns the items dealt round the given number of hands, leaving out
+-- empty hands.
+dealt :: Int -> [a] -> [[a]]
+dealt n xs = filter (not . null) [[x | (i, x) <- zip [0 ..] xs, i `mod` n == k] | k <- [0 .. n - 1]]
 
 -- | Returns the bounds `bounds` returns and the sets of rulings `causes`
 -- returns for the option and verdict, from one solver session.
 boundsAndCauses ::
   Monad m =>
   Solver m -> Model -> Text -> Standing -> [OptionId] -> OptionId -> Verdict -> m (Map OptionId Bounds, [Set Literal])
-boundsAndCauses solver@(Solver solving) m name s targets o v
+boundsAndCauses solver@Solver {solving} m name s targets o v
   | null m.space.grades || null targets = (,) Map.empty <$> causes solver m name o v
-  | otherwise = solving formula (\query -> (,) <$> each query <*> causesIn (chosen options query) m name o v)
+  | otherwise = solving formula (\query -> (,) <$> each query targets <*> causesIn (chosen options query) m name o v)
   where
-    (formula, each) = bounding m name s targets
+    (formula, each) = bounding m name s
     options = (compile m.space).variables
 
--- | Returns the formula bounding options and the queries bounding the
--- given ones.
-bounding :: Monad m => Model -> Text -> Standing -> [OptionId] -> (Formula Var, Query Var m -> m (Map OptionId Bounds))
-bounding m name s targets = (formula, each)
+-- | Returns the formula bounding options, and a function bounding the
+-- options it is given in a session over that formula.
+bounding :: Monad m => Model -> Text -> Standing -> (Formula Var, Query Var m -> [OptionId] -> m (Map OptionId Bounds))
+bounding m name s = (formula, each)
   where
-    each query =
+    each query targets =
       fmap Map.fromList . forM [o | o <- targets, maybe False (/= Impossible) (Map.lookup o s.verdicts)] $ \o -> do
         -- A seed counts only if its commitments can reach an option graded
         -- below the cap.
-        let bound (grade, below) cap = case Map.lookup cap below of
+        let bound (grade, below, refusals) cap = case Map.lookup cap below of
               Just relevant | not (Set.null relevant) -> do
                 held <-
                   backbone
@@ -201,13 +206,15 @@ bounding m name s targets = (formula, each)
                     (Set.insert (Take (Chosen o)) chosenRulings)
                     (Set.map (Take . Chosen) (Set.delete o (Set.difference relevant forced)))
                 let seeds = foldMap (\ls -> Set.fromList [p | Take (Chosen p) <- Set.toList ls]) held
-                best query o (Set.insert o seeds) grade cap
+                best query refusals o (Set.insert o seeds) grade cap
               _ -> pure cap
         hi <- bound highs top
         lo <- bound lows (min hi (low o))
         pure (o, Bounds lo hi)
       where
         forced = Map.keysSet (Map.filter (== Forced) s.verdicts)
+        highs = (high, reachingBelow highsBelow, refusedBelow query highsBelow)
+        lows = (low, reachingBelow lowsBelow, refusedBelow query lowsBelow)
     top = topGrade m.space
     positions = Map.fromList (zip m.space.grades [0 ..])
     at = optionAt m.space
@@ -218,15 +225,17 @@ bounding m name s targets = (formula, each)
     high o = maybe top gradeOf (assessed o)
     -- For each grade above the lowest, the options graded below it and the
     -- options whose commitments can reach one.
-    reachingBelow grade = Map.fromList [(k, closure (Set.fromList [p | p <- options, grade p < k])) | k <- [1 .. top]]
+    reachingBelow = Map.map closure
+    -- For each grade above the lowest, the options graded below it.
+    gradedBelow grade = Map.fromList [(k, Set.fromList [p | p <- options, grade p < k]) | k <- [1 .. top]]
+    lowsBelow = gradedBelow low
+    highsBelow = gradedBelow high
     closure r =
       let r' =
             Set.union
               r
               (Set.fromList [c | q <- Map.elems m.space.questions, any (`Set.member` r) (choices q), g <- q.raisedBy, c <- toList g])
        in if r' == r then r else closure r'
-    lows = (low, reachingBelow low)
-    highs = (high, reachingBelow high)
     f = compile m.space
     options = Set.toList f.variables
     chosenRulings = Set.map (fmap Chosen) (rulingsOf m.points name)
@@ -246,14 +255,17 @@ bounding m name s targets = (formula, each)
                   ]
               ]
         }
+    -- For each grade above the lowest, the signed literals refusing to
+    -- commit to every option graded below it.
+    refusedBelow query = traverse (encoded query . Set.map (Refuse . Committed))
     -- Start the search at the cap or the lowest seed's grade.
-    best query o seeds grade cap = go (minimum (cap : map grade (Set.toList seeds)))
+    best query refusals o seeds grade cap = case (encoded query held, refusals) of
+      (Just hs, Just below) -> go hs below (minimum (cap : map grade (Set.toList seeds)))
+      _ -> pure 0
       where
-        seeded = query.design (Set.union chosenRulings (Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds))))
-        go 0 = pure 0
-        go k = do
-          r <- seeded (Set.fromList [Refuse (Committed p) | p <- options, grade p < k]) Set.empty
-          maybe (go (k - 1)) (const (pure k)) r
+        held = Set.union chosenRulings (Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)))
+        go _ _ 0 = pure 0
+        go hs below k = reachesSigned query (below Map.! k ++ hs) >>= \r -> if r then pure k else go hs below (k - 1)
 
 -- | Returns each option whose upper bound is below a sibling's lower
 -- bound, with the sibling of highest lower bound, the most preferred among
@@ -292,7 +304,7 @@ implications solver m name s os = do
 -- | Returns every minimal subset of the rulings that leaves no design
 -- holding the literal, smallest first.
 whyAll :: Monad m => Solver m -> Space -> Set Literal -> Literal -> m [Set Literal]
-whyAll (Solver solving) space rulings l = solving (compile space) (\query -> conflicts query rulings (Set.singleton l))
+whyAll Solver {solving} space rulings l = solving (compile space) (\query -> conflicts query rulings (Set.singleton l))
 
 -- | Returns every minimal subset of the rulings that no valid design
 -- holding the given literals reaches, smallest first.
@@ -361,7 +373,7 @@ changedQuestions mv = [(q, x, y) | (q, x, y) <- mv.questions, not (isOpen x && i
 -- | Returns each minimal set of the point's rulings no design reaches, or
 -- Nothing when the point is fresh.
 staleness :: Monad m => Solver m -> Model -> Text -> m (Maybe [Set Literal])
-staleness (Solver solving) m name = solving (compile m.space) $ \query ->
+staleness Solver {solving} m name = solving (compile m.space) $ \query ->
   reaches query rulings >>= \case
     True -> pure Nothing
     False -> Just <$> conflicts query rulings Set.empty
@@ -370,7 +382,7 @@ staleness (Solver solving) m name = solving (compile m.space) $ \query ->
 
 -- | Returns the named points no design reaches.
 stalePoints :: Monad m => Solver m -> Model -> [Text] -> m (Set Text)
-stalePoints (Solver solving) m names = solving (compile m.space) $ \query ->
+stalePoints Solver {solving} m names = solving (compile m.space) $ \query ->
   Set.fromList <$> filterM (fmap not . reaches query . rulingsOf m.points) names
 
 -- | Returns the stale points among all the model's points.
@@ -510,7 +522,7 @@ ruledAgain solver c l r = case rulingFrom c.before.points c.name l of
 
 causes :: Monad m => Solver m -> Model -> Text -> OptionId -> Verdict -> m [Set Literal]
 causes _ _ _ _ Possible = pure []
-causes (Solver solving) m name o v = solving (compile m.space) (\query -> causesIn query m name o v)
+causes Solver {solving} m name o v = solving (compile m.space) (\query -> causesIn query m name o v)
 
 causesIn :: Monad m => Query OptionId m -> Model -> Text -> OptionId -> Verdict -> m [Set Literal]
 causesIn query m name o v = conflicts query (rulingsOf m.points name) (Set.singleton (opposing o v))
@@ -533,7 +545,7 @@ data Selected = Picked OptionId | Active Constraint
 -- minimal set of the space's constraints under which no design holds those
 -- rulings and gives the option another verdict.
 explain :: Monad m => Solver m -> Space -> OptionId -> Verdict -> [Set Literal] -> m [Cause]
-explain (Solver solving) space o v rss = solving (selecting space cs) (\query -> forM rss (\rs -> Cause rs <$> constraintCore query rs))
+explain Solver {solving} space o v rss = solving (selecting space cs) (\query -> forM rss (\rs -> Cause rs <$> constraintCore query rs))
   where
     cs = Compile.constraints space
     selectors = Set.fromList [Take (Active c) | (c, _) <- cs]
@@ -554,21 +566,18 @@ opposing o Forced = Refuse o
 opposing o _ = Take o
 
 -- | Returns the query over the options a design takes.
-chosen :: Functor m => Set OptionId -> Query Var m -> Query OptionId m
-chosen options query = Query {variables = options, design}
-  where
-    design held = projected (query.design (onChosen held))
+chosen :: Set OptionId -> Query Var m -> Query OptionId m
+chosen options query =
+  Query
+    { variables = options
+    , number = query.number . Chosen
+    , variable = \i -> query.variable i >>= chosenOption
+    , solve = query.solve
+    }
 
-projected ::
-  Functor m =>
-  (Set (Lit Var) -> Set Var -> m (Maybe (Set Var))) -> Set Literal -> Set OptionId -> m (Maybe (Set OptionId))
-projected holding extra vs = fmap chosenOptions <$> holding (onChosen extra) (Set.map Chosen vs)
-
-onChosen :: Set Literal -> Set (Lit Var)
-onChosen = Set.map (fmap Chosen)
-
-chosenOptions :: Set Var -> Set OptionId
-chosenOptions d = Set.fromList [o | Chosen o <- Set.toList d]
+chosenOption :: Var -> Maybe OptionId
+chosenOption (Chosen o) = Just o
+chosenOption _ = Nothing
 
 committedRaisers :: Change -> OptionId -> [Remark]
 committedRaisers c o =

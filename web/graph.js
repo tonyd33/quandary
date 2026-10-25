@@ -38,7 +38,12 @@ window.addEventListener('hashchange', focusHash);
 window.addEventListener('resize', () => cy.resize());
 const open = e => { location.href = e.target.data('href'); };
 let everyConstraint = false;
-const options = elements.filter(e => e.data.constraints);
+const constraints = elements.flatMap(e => (e.data.constraints || []).map(([cls, target]) => ({ source: e.data.id, target, cls })));
+const touching = new Map();
+for (const c of constraints) for (const key of [c.source, c.target]) {
+  if (!touching.has(key)) touching.set(key, []);
+  touching.get(key).push(c);
+}
 const shownNode = key => {
   const n = cy.getElementById(key);
   return n.nonempty() ? n : cy.getElementById(parents.get(key) || '');
@@ -46,18 +51,17 @@ const shownNode = key => {
 const drawConstraints = hovered => {
   cy.remove('edge.constraint');
   const drawn = [];
-  for (const o of options) for (const [cls, target] of o.data.constraints) {
-    if (!everyConstraint && hovered !== o.data.id && hovered !== target) continue;
-    const from = shownNode(o.data.id), to = shownNode(target);
+  for (const c of everyConstraint ? constraints : touching.get(hovered) || []) {
+    const from = shownNode(c.source), to = shownNode(c.target);
     if (from.empty() || to.empty() || from.same(to)) continue;
-    drawn.push({ group: 'edges', data: { source: from.id(), target: to.id() }, classes: 'constraint ' + cls });
+    drawn.push({ group: 'edges', data: { source: from.id(), target: to.id() }, classes: 'constraint ' + c.cls });
   }
   cy.add(drawn);
 };
 cy.on('expandcollapse.beforecollapse expandcollapse.beforeexpand', () => cy.remove('edge.constraint'));
 cy.on('layoutstop', () => drawConstraints(null));
-cy.on('mouseover', 'node.option', e => drawConstraints(e.target.id()));
-cy.on('mouseout', 'node.option', () => drawConstraints(null));
+cy.on('mouseover', 'node.option', e => { if (!everyConstraint) drawConstraints(e.target.id()); });
+cy.on('mouseout', 'node.option', () => { if (!everyConstraint) drawConstraints(null); });
 document.getElementById('constraints').onclick = e => {
   everyConstraint = !everyConstraint;
   e.target.classList.toggle('on', everyConstraint);

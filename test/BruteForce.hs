@@ -2,49 +2,46 @@ module BruteForce (bruteForce, bruteForceOn) where
 
 import Control.Applicative ((<|>))
 import Data.Functor.Identity (Identity, runIdentity)
-import Data.Set (Set)
-import Data.Set qualified as Set
-import Quandary.Core.Solver (Query (..), Solver (..))
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
+import Quandary.Core.Solver (Query, Sat (..), Solve, Solver (..), fromSat)
 import Quandary.Core.Types
 
 -- | Search the designs by backtracking. Exponential in the variables.
-bruteForce :: Applicative m => Solver m
-bruteForce = Solver {solving = search}
+bruteForce :: Monad m => Solver m
+bruteForce = fromSat Sat {withClauses = search, width = 1, parallel = sequence}
 
 bruteForceOn :: Ord v => Formula v -> (Query v Identity -> Identity a) -> a
-bruteForceOn f k = runIdentity (search f k)
+bruteForceOn f k = case bruteForce of
+  Solver {solving} -> runIdentity (solving f k)
 
-search :: (Ord v, Applicative m) => Formula v -> (Query v m -> m a) -> m a
-search f k = k Query {variables = f.variables, design}
-  where
-    design held extra vs = pure (Set.intersection vs . taken <$> firstDesign f (Set.union held extra))
+search :: Applicative m => Int -> [[Int]] -> (Solve m -> m a) -> m a
+search n clauses k = k (\assumed asked -> pure (IntSet.intersection (IntSet.fromList asked) <$> firstDesign n clauses assumed))
 
--- | Returns the first design holding the literals, deciding the variables
--- in order, taken first.
-firstDesign :: Ord v => Formula v -> Set (Lit v) -> Maybe (Set (Lit v))
-firstDesign f held
-  | any unknown held = Nothing
-  | violates f held = Nothing
-  | otherwise = go (filter (not . decides held) (Set.toList f.variables)) held
+-- | Returns the variables the first design holding the literals takes,
+-- deciding the variables in order, taken first.
+firstDesign :: Int -> [[Int]] -> [Int] -> Maybe IntSet
+firstDesign n clauses assumed
+  | violates start = Nothing
+  | otherwise = taken <$> go (filter (not . decides start) [1 .. n]) start
   where
-    unknown l = Set.notMember (optionOf l) f.variables
+    start = IntSet.fromList assumed
     go [] d = Just d
-    go (v : vs) d = extend (Take v) <|> extend (Refuse v)
+    go (v : vs) d = extend v <|> extend (negate v)
       where
         extend l
-          | violates f d' = Nothing
+          | violates d' = Nothing
           | otherwise = go vs d'
           where
-            d' = Set.insert l d
+            d' = IntSet.insert l d
+    violates d = any (all (\l -> IntSet.member (negate l) d)) clauses || contradicts d
 
-decides :: Ord v => Set (Lit v) -> v -> Bool
-decides d v = Set.member (Take v) d || Set.member (Refuse v) d
+-- | Holds when the signed literals hold a variable both ways.
+contradicts :: IntSet -> Bool
+contradicts d = any (\l -> IntSet.member (negate l) d) (IntSet.toList d)
 
-violates :: Ord v => Formula v -> Set (Lit v) -> Bool
-violates f d = any (`Set.isSubsetOf` d) f.forbidden || contradicts d
+decides :: IntSet -> Int -> Bool
+decides d v = IntSet.member v d || IntSet.member (negate v) d
 
-contradicts :: Ord v => Set (Lit v) -> Bool
-contradicts d = any (\l -> Set.member (opposite l) d) d
-
-taken :: Ord v => Set (Lit v) -> Set v
-taken d = Set.fromList [v | Take v <- Set.toList d]
+taken :: IntSet -> IntSet
+taken = IntSet.filter (> 0)

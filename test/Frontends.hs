@@ -12,7 +12,7 @@ import Data.Text.IO qualified as TextIO
 import Data.Text.Lazy qualified as LazyText
 import Data.Text.Lazy.Encoding qualified as LazyText
 import Fixtures (fixture, listed, other, withCopy)
-import Lucid (renderBS, renderText)
+import Lucid (renderText)
 import Network.HTTP.Types
   ( Status (..)
   , decodePath
@@ -110,9 +110,9 @@ parsed = uncurry (route "current") . decodePath . Text.encodeUtf8
 -- | Returns the page with each asset's version left out.
 unversioned :: LazyText.Text -> LazyText.Text
 unversioned t = case LazyText.breakOn "?v=" t of
-  (before, after)
-    | LazyText.null after -> before
-    | otherwise -> before <> unversioned (LazyText.dropWhile isHexDigit (LazyText.drop 3 after))
+  (kept, rest)
+    | LazyText.null rest -> kept
+    | otherwise -> kept <> unversioned (LazyText.dropWhile isHexDigit (LazyText.drop 3 rest))
 
 drawnAt :: Route -> IO Drawn
 drawnAt r = withLive fixture (`page` r)

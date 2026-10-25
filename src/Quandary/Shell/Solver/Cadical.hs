@@ -2,12 +2,14 @@
 
 module Quandary.Shell.Solver.Cadical (cadical) where
 
+import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (bracket)
 import Control.Monad (filterM, forM_)
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Foreign.C.Types (CInt (..))
 import Foreign.Ptr (Ptr)
+import GHC.Conc (numCapabilities)
 import Quandary.Core.Solver (Sat (..), Solve, Solver, fromSat)
 
 data CCaDiCaL
@@ -20,13 +22,14 @@ foreign import capi unsafe "ccadical.h ccadical_add" add :: Ptr CCaDiCaL -> CInt
 
 foreign import capi unsafe "ccadical.h ccadical_assume" assume :: Ptr CCaDiCaL -> CInt -> IO ()
 
-foreign import capi unsafe "ccadical.h ccadical_solve" solve :: Ptr CCaDiCaL -> IO CInt
+foreign import capi safe "ccadical.h ccadical_solve" solve :: Ptr CCaDiCaL -> IO CInt
 
 foreign import capi unsafe "ccadical.h ccadical_val" val :: Ptr CCaDiCaL -> CInt -> IO CInt
 
--- | Answers from CaDiCaL, one solver per session.
+-- | Answers from CaDiCaL, one solver per session, as many sessions at once
+-- as the program has capabilities.
 cadical :: Solver IO
-cadical = fromSat Sat {withClauses = session}
+cadical = fromSat Sat {withClauses = session, width = numCapabilities, parallel = mapConcurrently id}
 
 -- | Run solves on a fresh solver holding the clauses.
 session :: Int -> [[Int]] -> (Solve IO -> IO a) -> IO a

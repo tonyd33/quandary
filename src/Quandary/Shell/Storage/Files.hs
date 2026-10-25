@@ -18,7 +18,8 @@ module Quandary.Shell.Storage.Files
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (finally)
+import Control.Concurrent.Async (forConcurrently)
+import Control.Exception (evaluate, finally)
 import Control.Monad (forM, forM_, unless)
 import Data.ByteString qualified as ByteString
 import Data.Conduit (runConduitRes, (.|))
@@ -145,7 +146,7 @@ documents ::
   FilePath -> FilePath -> (Text -> Document) -> (Document -> Yaml -> Body -> Text -> Decode a) -> IO [([FileProblem], a)]
 documents root dir kind decode = do
   paths <- markdownUnder (root </> dir)
-  forM paths $ \path -> do
+  forConcurrently paths $ \path -> do
     let doc = kind (Text.intercalate "/" (map Text.pack (splitDirectories (dropExtension (makeRelative (root </> dir) path)))))
     (issues, decoded) <- readDocument doc decode =<< ByteString.readFile path
     pure ([FileProblem (normalise path) (Just l) (Format i) | (l, i) <- issues], decoded)
@@ -192,14 +193,25 @@ readDocument doc decode bytes = case decodeUtf8' bytes of
         let bodyLine = length front + 3
             body = Text.unlines after
         (yamlIssues, yaml) <- parseYaml (encodeUtf8 (Text.unlines front))
+        split <- parsedBody doc bodyLine body
         let shifted = [(l + 1, Yaml i) | (l, i) <- yamlIssues]
             tree = shiftYaml 1 (fromMaybe (Mapping 1 []) yaml)
-        pure (decode doc tree (bodyOf doc bodyLine body) body `with` shifted)
+        pure (decode doc tree split body `with` shifted)
       (_, []) -> pure (decode doc (Mapping 1 []) emptyBody "" `with` [(1, UnclosedFrontmatter)])
-    _ -> pure (decode doc (Mapping 1 []) (bodyOf doc 1 content) content `with` [(1, NoFrontmatter)])
+    _ -> do
+      split <- parsedBody doc 1 content
+      pure (decode doc (Mapping 1 []) split content `with` [(1, NoFrontmatter)])
   where
     (issues, a) `with` more = (more ++ issues, a)
     emptyBody = Body "" []
+
+-- | Returns the body split at its headings, the Markdown parsed.
+parsedBody :: Document -> Int -> Text -> IO Body
+parsedBody doc firstLine content = evaluate (forced (bodyOf doc firstLine content))
+
+-- | Returns the body with every section's heading and level evaluated.
+forced :: Body -> Body
+forced b = foldr (\s rest -> s.heading.value `seq` s.level `seq` rest) b b.sections
 
 shiftYaml :: Int -> Yaml -> Yaml
 shiftYaml n (Scalar l t) = Scalar (l + n) t
