@@ -1,6 +1,7 @@
 module Quandary.Shell.Render.Tui
   ( Name (..)
   , draw
+  , bodies
   , attributes
   )
 where
@@ -8,6 +9,7 @@ where
 import Brick
 import Brick.Widgets.Border (borderWithLabel)
 import Brick.Widgets.Center (centerLayer)
+import Data.Map.Lazy qualified as Lazy
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -32,6 +34,7 @@ import Quandary.Shell.Browse
   , Tui (..)
   )
 import Quandary.Shell.Browse qualified as Browse
+import Quandary.Shell.Markdown qualified as Markdown
 import Quandary.Shell.Render.Markdown (codeAttr, headingAttr, markdown)
 import Quandary.Shell.Render.Text qualified as Render
 
@@ -58,8 +61,8 @@ draw :: Tui -> [Widget Name]
 draw t = maybe [] (\o -> [overlayWidget t o]) t.overlay ++ [vBox [header t, content, footer]]
   where
     content = case Browse.pageStanding t.drawn of
-      Just (m, s) -> hBox [questionList t m s, pageWidget t.focus t.drawn]
-      Nothing -> pageWidget t.focus t.drawn
+      Just (m, s) -> hBox [questionList t m s, pageWidget t.focus t.bodies t.drawn]
+      Nothing -> pageWidget t.focus t.bodies t.drawn
 
 header :: Tui -> Widget Name
 header t = hBox [txt (" quandary  " <> Browse.routeTitle t.route), padLeft Max (txt (counts <> " "))]
@@ -118,14 +121,13 @@ padded label = " " <> label <> " "
 
 -- | Returns the page in full, its selected option and expanded branches
 -- marked.
-pageWidget :: Focus -> Drawn -> Widget Name
-pageWidget f d = case d.shown of
+pageWidget :: Focus -> Map Text [Markdown.Block] -> Drawn -> Widget Name
+pageWidget f parsed d = case d.shown of
   Problems ps -> framed "the space has problems" (scrolled BodyView (padLeftRight 1 (wrappedLines (map (Render.problem "") ps))))
   Shown m pg -> case pg of
     StatusPage p a bs ss -> body ("point " <> p) BodyView (statusWidget m p a bs ss)
-    QuestionPage v -> questionWidget f m.space v
-    OptionPage v -> optionWidget f m v
-    Redirect r -> framed "go to" (padRight Max (padLeftRight 1 (txtWrap (Browse.routeTitle r))))
+    QuestionPage v -> questionWidget f parsed m.space v
+    OptionPage v -> optionWidget f parsed m v
     PointsPage ps -> body "points" BodyView (pointsWidget ps)
     GraphPage _ _ -> framed "graph" (padRight Max (padLeftRight 1 (txtWrap "serve draws the graph")))
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
@@ -178,33 +180,33 @@ detailed rows = Widget Greedy Fixed $ do
 pointsWidget :: [PointView] -> Widget Name
 pointsWidget ps = detailed [(pv.point.name, Just (Render.pointNote pv)) | pv <- ps]
 
-questionWidget :: Focus -> Space -> QuestionView -> Widget Name
-questionWidget f space v =
+questionWidget :: Focus -> Map Text [Markdown.Block] -> Space -> QuestionView -> Widget Name
+questionWidget f parsed space v =
   vBox
     [ paneFrame f Options (Render.questionTitle v.analysis v.question)
         . fitted OptionList
         . padRight Max
         . padLeftRight 1
         . vBox
-        $ txtWrap (Render.questionShape v.question) : txt " " : concatMap optionEntry v.rows
+        $ txtWrap (Render.plain (Render.questionShape v.question)) : txt " " : concatMap optionEntry v.rows
     , paneFrame f Reading label (scrolled BodyView (padLeftRight 1 reading))
     ]
   where
-    (label, reading) = readingBody space f.option v.question
+    (label, reading) = readingBody parsed space f.option v.question
     keyWidth = 2 + maximum (0 : map (Text.length . Render.key . (.option)) v.rows)
     optionEntry r =
       highlighted
         (f.option == Just r.option)
         ( txt (Text.justifyLeft 12 ' ' (Render.rowMark r) <> Text.justifyLeft keyWidth ' ' (Render.key r.option))
-            <+> txtWrap (nonEmpty (Render.rowDetail space v.point r))
+            <+> txtWrap (nonEmpty (Render.plain (Render.rowDetail space v.point r)))
         )
-        : map (padLeft (Pad 12) . txtWrap) (Render.rowNotes space r)
+        : map (padLeft (Pad 12) . txtWrap . Render.plain) (Render.rowNotes space r)
         ++ [padLeft (Pad 12) (objectionsWidget f r.option r.objections) | not (null r.objections)]
     nonEmpty "" = " "
     nonEmpty d = d
 
-optionWidget :: Focus -> Model -> OptionView -> Widget Name
-optionWidget f m v =
+optionWidget :: Focus -> Map Text [Markdown.Block] -> Model -> OptionView -> Widget Name
+optionWidget f parsed m v =
   vBox
     [ paneFrame f Options (Render.optionTitle v)
         . fitted OptionList
@@ -213,7 +215,7 @@ optionWidget f m v =
         . vBox
         $ wrappedLines (("in " <> Render.questionTitle v.analysis v.question) : Render.optionFacts m v)
           : [vBox [txt " ", objectionTree f v.row.objections] | not (null v.row.objections)]
-    , paneFrame f Reading "description" (scrolled BodyView (padLeftRight 1 (markdown v.description)))
+    , paneFrame f Reading "description" (scrolled BodyView (padLeftRight 1 (markdown parsed (optionDescription v))))
     ]
 
 -- | Returns the widget in a viewport as tall as its content, at most half
@@ -235,11 +237,21 @@ objectionsWidget f o obs
 
 -- | Returns the label and text of the selected listed option's
 -- description, else of the question's.
-readingBody :: Space -> Maybe OptionId -> Question -> (Text, Widget Name)
-readingBody space (Just (Listed i)) _
+readingBody :: Map Text [Markdown.Block] -> Space -> Maybe OptionId -> Question -> (Text, Widget Name)
+readingBody parsed space (Just (Listed i)) _
   | Just (_, o) <- optionAt space i =
-      (idText o.id, vBox [withAttr headingAttr (txtWrap o.title), txt " ", markdown o.description])
-readingBody _ _ q = ("description", markdown q.description)
+      (idText o.id, vBox [withAttr headingAttr (txtWrap o.title), txt " ", markdown parsed o.description])
+readingBody parsed _ _ q = ("description", markdown parsed q.description)
+
+-- | Returns the page's question and option descriptions, each parsed when
+-- first looked up.
+bodies :: Drawn -> Map Text [Markdown.Block]
+bodies d = Lazy.fromList [(t, Markdown.parse t) | t <- descriptions]
+  where
+    descriptions = case d.shown of
+      Shown _ (QuestionPage v) -> v.question.description : map (.description) v.question.options
+      Shown _ (OptionPage v) -> [optionDescription v]
+      _ -> []
 
 -- | Returns the widget selected and scrolled into view when the condition
 -- holds.
@@ -262,7 +274,7 @@ objectionTree f = vBox . map objection
         (Pad 2)
         ( highlighted
             (f.option == Just c.option)
-            (padRight Max (txt (Text.justifyLeft 12 ' ' (Render.verdictText c.verdict) <> optionName c.option)))
+            (padRight Max (txt (objectionLine c)))
         )
         : [padLeft (Pad 4) (objectionTree f c.objections) | Set.member c.option f.expanded, not (null c.objections)]
 
@@ -287,11 +299,18 @@ overlayWidget t (GoToPicker typed i) =
     vBox
       [ txt (" > " <> typed)
       , vLimit (min 15 (max 1 (length matches))) . viewport GoToList Vertical . vBox $
-          [highlighted (n == i) (padRight Max (txt (padded name))) | (n, (name, _)) <- zip [0 ..] matches]
+          [highlighted (n == selected) (padRight Max (txt (padded name))) | (n, (name, _)) <- zip [0 ..] matches]
       , withAttr dimAttr (txt " up/down move  enter open  esc cancel ")
       ]
   where
     matches = Browse.goToMatches typed t.drawn
+    selected = Browse.clampIndex matches i
+
+-- | Returns the raised option's verdict, id and rank.
+objectionLine :: RaisedOption -> Text
+objectionLine c =
+  Text.stripEnd
+    (Text.justifyLeft 12 ' ' (Render.verdictText c.verdict) <> optionName c.option <> " " <> Render.rankText c.rank)
 
 whatifKeys :: Bool -> Text
 whatifKeys True = "r reopen  "

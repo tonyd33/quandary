@@ -46,8 +46,8 @@ data Inline
 data Alignment = AlignDefault | AlignLeft | AlignCenter | AlignRight
   deriving (Eq, Show)
 
--- | Returns the GitHub-flavoured Markdown's blocks: tables, strikethrough
--- and autolinks.
+-- | Returns the Markdown's blocks, parsed with GitHub's tables,
+-- strikethrough and autolinks.
 parse :: Text -> [Block]
 parse = parseWith (pipeTableSpec <> strikethroughSpec <> autolinkSpec <> defaultSyntaxSpec)
 
@@ -136,15 +136,16 @@ alignment Extensions.DefaultAlignedCol = AlignDefault
 
 -- | Returns the inlines' text without their markup.
 plainText :: [Inline] -> Text
-plainText = foldMap go
-  where
-    go (Str t) = t
-    go (Code t) = t
-    go SoftBreak = " "
-    go LineBreak = ""
-    go (RawInline _) = ""
-    go (Emph is) = plainText is
-    go (Strong is) = plainText is
-    go (Strike is) = plainText is
-    go (Link _ is) = plainText is
-    go (Image _ is) = plainText is
+plainText = foldMap inlineText
+
+inlineText :: Inline -> Text
+inlineText (Str t) = t
+inlineText (Code t) = t
+inlineText SoftBreak = " "
+inlineText LineBreak = ""
+inlineText (RawInline _) = ""
+inlineText (Emph is) = plainText is
+inlineText (Strong is) = plainText is
+inlineText (Strike is) = plainText is
+inlineText (Link _ is) = plainText is
+inlineText (Image _ is) = plainText is

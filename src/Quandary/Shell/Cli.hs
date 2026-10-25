@@ -40,7 +40,7 @@ main = Options.parse >>= run >>= exitWith
 run :: Options -> IO ExitCode
 run o = case o.command of
   Browse -> watched (Browse.run o.dir o.point)
-  Serve port -> watched (Serve.run o.dir o.point port)
+  Serve address port -> watched (Serve.run o.dir o.point address port)
   Check -> do
     (loaded, v) <- validated
     Check.run o.dir (Files.problemsOf o.dir loaded v) v.model

@@ -37,10 +37,11 @@ withQuestion space q k = maybe (failWith (notAQuestion space q)) k (Map.lookup (
 -- | Run the continuation on the question with the id, else on the option
 -- with its question.
 withQuestionOrOption :: Space -> Text -> (Either Question (Question, OptionId) -> IO ExitCode) -> IO ExitCode
-withQuestionOrOption space t k = case (Map.lookup (Id t) space.questions, optionWithQuestion space t) of
-  (Just q, _) -> k (Left q)
-  (Nothing, Just qo) -> k (Right qo)
-  (Nothing, Nothing) -> failWith ("unknown question " <> t)
+withQuestionOrOption space t k =
+  maybe
+    (failWith ("unknown question or option " <> t))
+    k
+    (Left <$> Map.lookup (Id t) space.questions <|> Right <$> optionWithQuestion space t)
 
 -- | Returns the option with the id and its question.
 optionWithQuestion :: Space -> Text -> Maybe (Question, OptionId)

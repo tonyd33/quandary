@@ -11,7 +11,7 @@
 
 - `graph --format dot` prints the space as a Graphviz digraph, each question a cluster holding its options. `graph` alone still prints Mermaid.
 - Added `browse`, which shows a point in the terminal: its questions grouped as in `status`, the selected question as in `show` with its description and option bodies rendered as GitHub-flavoured Markdown, the questions each option raises, a page for each option, other points, and `whatif`. `g` goes to any question or option id, matched fuzzily as you type. It redraws when the space's files change.
-- Added `serve [--port N]`, which serves the same pages as web pages on 127.0.0.1, every option linked to its page and a go-to box on each. A graph page draws the space as questions holding their options, coloured by verdict, each opening its page on a click. Terms such as the status groups, verdicts and bounds say what they mean on hover. A page reloads itself when the space's files change. The server refuses requests whose `Host` is not `127.0.0.1:N` or `localhost:N`, and drops raw HTML from bodies.
+- Added `serve [--bind ADDR] [--port N]`, which serves the same pages as web pages on 127.0.0.1, or on `ADDR` for another device on the local network, every option linked to its page, and a go-to box on every page. A graph page draws the space as questions holding their options, coloured by verdict, each opening its page on a click. Terms such as the status groups, verdicts and bounds say what they mean on hover. A page reloads itself when the space's files change. The server refuses requests whose `Host` is not `localhost:N` or an IP address with `:N`, and drops raw HTML and script-running links from bodies.
 
 ### Improvements
 

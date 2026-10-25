@@ -8,7 +8,6 @@ where
 import Data.Aeson (Value, object, (.=))
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Quandary.Core.Types
 import Quandary.Shell.Render.Graph
   ( Edge (..)
@@ -18,6 +17,7 @@ import Quandary.Shell.Render.Graph
   , Raise (..)
   , Relation (..)
   )
+import Quandary.Shell.Render.Text qualified as Render
 
 -- | Returns the graph's questions as compound nodes holding their options,
 -- with an edge from each raiser to the question it raises, a joint node
@@ -29,17 +29,21 @@ elements questionHref optionHref g = concatMap question g.questions
     question q =
       node (questionKey q.id) Nothing q.label "question" (questionHref q.id)
         : concatMap (option q) q.options
-        ++ concat (zipWith (raise q) [0 :: Int ..] q.raises)
+        ++ concat (zipWith (raise q.id) [0 ..] q.raises)
     option q o =
       node (optionKey o.id) (Just (questionKey q.id)) o.label (verdictClass o.verdict) (optionHref o.id)
         : [edge (optionKey o.id) (optionKey e.target) (relationClass e.relation) | e <- o.edges]
-    raise q _ (RaisedBy o) = [edge (optionKey o) (questionKey q.id) "raises"]
-    raise q n (Joint o (p :| ps)) =
-      object ["data" .= object ["id" .= joint, "label" .= ("all of" :: Text)], "classes" .= ("joint" :: Text)]
-        : edge joint (questionKey q.id) "raises"
-        : [edge (optionKey r) joint "raises" | r <- o : p : ps]
-      where
-        joint = "j:" <> idText q.id <> ":" <> tshow n
+
+-- | Returns the edges from the raiser to the question, through a joint
+-- node numbered n when its options raise it only together.
+raise :: Id -> Int -> Raise -> [Value]
+raise q _ (RaisedBy o) = [edge (optionKey o) (questionKey q) "raises"]
+raise q n (Joint o (p :| ps)) =
+  object ["data" .= object ["id" .= joint, "label" .= ("all of" :: Text)], "classes" .= ("joint" :: Text)]
+    : edge joint (questionKey q) "raises"
+    : [edge (optionKey r) joint "raises" | r <- o : p : ps]
+  where
+    joint = "j:" <> idText q <> ":" <> Render.tshow n
 
 node :: Text -> Maybe Text -> Text -> Text -> Text -> Value
 node key parent label cls href =
@@ -58,15 +62,9 @@ optionKey :: OptionId -> Text
 optionKey o = "o:" <> optionName o
 
 verdictClass :: Maybe Verdict -> Text
-verdictClass (Just Forced) = "option forced"
-verdictClass (Just Possible) = "option possible"
-verdictClass (Just Impossible) = "option impossible"
-verdictClass Nothing = "option"
+verdictClass = maybe "option" (("option " <>) . Render.verdictText)
 
 relationClass :: Relation -> Text
 relationClass Needs = "needs"
 relationClass NeedsOneOf = "needs-one-of"
 relationClass Excludes = "excludes"
-
-tshow :: Show a => a -> Text
-tshow = Text.pack . show

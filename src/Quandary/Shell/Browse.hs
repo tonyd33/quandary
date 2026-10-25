@@ -18,15 +18,15 @@ module Quandary.Shell.Browse
   , awaitChange
   , nextPane
   , pageStanding
-  , pageQuestion
   , shownQuestion
   , shownOption
   , pageRow
   , pageOptions
   , Target (..)
-  , targets
   , targetRoute
+  , goToRoute
   , goToMatches
+  , clampIndex
   , listedQuestions
   , listedIds
   , landing
@@ -57,6 +57,7 @@ import Quandary.Core.Validate
 import Quandary.Core.View
 import Quandary.Core.View qualified as View
 import Quandary.Shell.Fuzzy qualified as Fuzzy
+import Quandary.Shell.Markdown qualified as Markdown
 import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Resolve (Verb)
 import Quandary.Shell.Resolve qualified as Resolve
@@ -73,7 +74,6 @@ data Route
   | OptionAt Text Text
   | Points
   | WhatifAt Text [(Verb, Text)]
-  | GoTo Text Text
   | GraphAt Text
   deriving (Eq, Ord, Show)
 
@@ -84,7 +84,6 @@ routePoint (QuestionAt p _) = p
 routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
 routePoint (WhatifAt p _) = p
-routePoint (GoTo p _) = p
 routePoint (GraphAt p) = p
 
 routeTitle :: Route -> Text
@@ -93,7 +92,6 @@ routeTitle (QuestionAt p q) = idText q <> " at " <> p
 routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
 routeTitle (WhatifAt p _) = "whatif at " <> p
-routeTitle (GoTo p t) = "go to " <> t <> " at " <> p
 routeTitle (GraphAt p) = "graph at " <> p
 
 data Page
@@ -103,8 +101,6 @@ data Page
   | PointsPage [PointView]
   | WhatifPage Text [Supposition] (Either EditError Whatif)
   | GraphPage Text Graph.Graph
-  | -- | The page the route names.
-    Redirect Route
   | NotFound Text
 
 newtype Revision = Revision Int
@@ -238,9 +234,6 @@ build b (OptionAt p t) = atPoint b.model p $ case Resolve.optionWithQuestion b.m
   Just (q, o) -> do
     a <- analysisAt b p
     OptionPage <$> View.optionView cadical b.model p a q o
-build b (GoTo p t) = atPoint b.model p . pure $ case targets b.model.space of
-  ts | (_, target) : _ <- Fuzzy.ranked t ts -> Redirect (targetRoute p target)
-  _ -> NotFound ("no id matches " <> t)
 build b (GraphAt p) = atPoint b.model p $ do
   a <- analysisAt b p
   pure (GraphPage p (Graph.build b.model.space ((.verdicts) <$> standing a)))
@@ -251,8 +244,11 @@ build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.sp
 
 atPoint :: Model -> Text -> IO Page -> IO Page
 atPoint m p k
-  | p == Rulings.current || Map.member p m.points = k
+  | hasPoint m p = k
   | otherwise = pure (NotFound ("unknown point " <> p))
+
+hasPoint :: Model -> Text -> Bool
+hasPoint m p = p == Rulings.current || Map.member p m.points
 
 supposed :: Space -> (Verb, Text) -> Either Text Supposition
 supposed space (v, t) = maybe (Left t) Right (Resolve.supposing space v t)
@@ -297,6 +293,8 @@ data Tui = Tui
   , route :: Route
   , back :: [Route]
   , drawn :: Drawn
+  , bodies :: Map Text [Markdown.Block]
+  -- ^ The page's descriptions, each parsed when first drawn.
   , focus :: Focus
   , overlay :: Maybe Overlay
   , folded :: Bool
@@ -318,8 +316,8 @@ data Focus = Focus
   }
 
 -- | A picker over the current page: the points, at the index selected;
--- what to suppose of an option; or the ids matching the text typed, at the
--- index selected.
+-- what to suppose of an option; or the text typed, with the index
+-- selected among the ids it matches.
 data Overlay = PointPicker Int | WhatifPicker OptionId | GoToPicker Text Int
 
 -- | A status group in the question list: its questions, or how many it
@@ -337,11 +335,6 @@ pageStanding d = case d.shown of
   Shown m (StatusPage _ a _ _) -> (,) m <$> standing a
   Shown m (QuestionPage v) -> (,) m <$> standing v.analysis
   Shown m (OptionPage v) -> (,) m <$> standing v.analysis
-  _ -> Nothing
-
-pageQuestion :: Drawn -> Maybe QuestionView
-pageQuestion d = case d.shown of
-  Shown _ (QuestionPage v) -> Just v
   _ -> Nothing
 
 -- | Returns the question the page shows, or whose option it shows.
@@ -423,6 +416,22 @@ goToMatches :: Text -> Drawn -> [(Text, Target)]
 goToMatches t d = case d.shown of
   Shown m _ -> Fuzzy.ranked t (targets m.space)
   Problems _ -> []
+
+-- | Returns the route to the id at the point the text matches best, else
+-- the page saying why there is none.
+goToRoute :: Live -> Text -> Text -> IO (Either Drawn Route)
+goToRoute live p t = do
+  (rev, u) <- readTVarIO live.loaded
+  pure $ case u of
+    Unusable ps -> Left (Drawn rev (Problems ps))
+    Usable m
+      | not (hasPoint m p) -> Left (Drawn rev (Shown m (NotFound ("unknown point " <> p))))
+      | (_, target) : _ <- Fuzzy.ranked t (targets m.space) -> Right (targetRoute p target)
+      | otherwise -> Left (Drawn rev (Shown m (NotFound ("no id matches " <> t))))
+
+-- | Returns the index clamped to the list's indices, 0 when it is empty.
+clampIndex :: [a] -> Int -> Int
+clampIndex xs i = max 0 (min (length xs - 1) i)
 
 targetRoute :: Text -> Target -> Route
 targetRoute p (ToQuestion q) = QuestionAt p q

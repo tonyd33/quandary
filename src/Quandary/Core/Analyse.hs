@@ -12,6 +12,7 @@ module Quandary.Core.Analyse
   , verdictAt
   , taken
   , bounds
+  , boundsAndCauses
   , dominance
   , implications
   , topGrade
@@ -162,6 +163,25 @@ bounds :: Monad m => Solver m -> Model -> Text -> Standing -> [OptionId] -> m (M
 bounds (Solver solving) m name s targets
   | null m.space.grades || null targets = pure Map.empty
   | otherwise = solving formula each
+  where
+    (formula, each) = bounding m name s targets
+
+-- | Returns the bounds `bounds` returns and the sets of rulings `causes`
+-- returns for the option and verdict, from one solver session.
+boundsAndCauses ::
+  Monad m =>
+  Solver m -> Model -> Text -> Standing -> [OptionId] -> OptionId -> Verdict -> m (Map OptionId Bounds, [Set Literal])
+boundsAndCauses solver@(Solver solving) m name s targets o v
+  | null m.space.grades || null targets = (,) Map.empty <$> causes solver m name o v
+  | otherwise = solving formula (\query -> (,) <$> each query <*> causesIn (chosen options query) m name o v)
+  where
+    (formula, each) = bounding m name s targets
+    options = (compile m.space).variables
+
+-- | Returns the formula bounding options and the queries bounding the
+-- given ones.
+bounding :: Monad m => Model -> Text -> Standing -> [OptionId] -> (Formula Var, Query Var m -> m (Map OptionId Bounds))
+bounding m name s targets = (formula, each)
   where
     each query =
       fmap Map.fromList . forM [o | o <- targets, maybe False (/= Impossible) (Map.lookup o s.verdicts)] $ \o -> do
@@ -483,7 +503,33 @@ ruledAgain solver c l r = case rulingFrom c.before.points c.name l of
     v = assertedVerdict l
 
 causes :: Monad m => Solver m -> Model -> Text -> OptionId -> Verdict -> m [Set Literal]
-causes solver m name o v = whyAll solver m.space (rulingsOf m.points name) (if v == Forced then Refuse o else Take o)
+causes _ _ _ _ Possible = pure []
+causes (Solver solving) m name o v = solving (compile m.space) (\query -> causesIn query m name o v)
+
+causesIn :: Monad m => Query OptionId m -> Model -> Text -> OptionId -> Verdict -> m [Set Literal]
+causesIn query m name o v = conflicts query (rulingsOf m.points name) (Set.singleton (opposing o v))
+
+-- | Returns the literal no design holds when the option has the verdict.
+opposing :: OptionId -> Verdict -> Literal
+opposing o Forced = Refuse o
+opposing o _ = Take o
+
+-- | Returns the query over the options a design takes.
+chosen :: Functor m => Set OptionId -> Query Var m -> Query OptionId m
+chosen options query = Query {variables = options, design}
+  where
+    design held = projected (query.design (onChosen held))
+
+projected ::
+  Functor m =>
+  (Set (Lit Var) -> Set Var -> m (Maybe (Set Var))) -> Set Literal -> Set OptionId -> m (Maybe (Set OptionId))
+projected holding extra vs = fmap chosenOptions <$> holding (onChosen extra) (Set.map Chosen vs)
+
+onChosen :: Set Literal -> Set (Lit Var)
+onChosen = Set.map (fmap Chosen)
+
+chosenOptions :: Set Var -> Set OptionId
+chosenOptions d = Set.fromList [o | Chosen o <- Set.toList d]
 
 committedRaisers :: Change -> OptionId -> [Remark]
 committedRaisers c o =

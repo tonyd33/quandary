@@ -8,6 +8,8 @@ where
 import Brick
 import Brick.Widgets.Border (hBorder)
 import Data.List (intersperse, transpose)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Quandary.Shell.Markdown qualified as M
@@ -19,9 +21,10 @@ headingAttr :: AttrName
 headingAttr = attrName "heading"
 
 -- | Returns the GitHub-flavoured Markdown's blocks one under another, code
--- blocks verbatim, tables in aligned columns.
-markdown :: Text -> Widget n
-markdown = blocks . M.parse
+-- blocks verbatim, tables in aligned columns, taking the blocks from those
+-- parsed already when they hold the text.
+markdown :: Map Text [M.Block] -> Text -> Widget n
+markdown parsed t = blocks (Map.findWithDefault (M.parse t) t parsed)
 
 blocks :: [M.Block] -> Widget n
 blocks [] = emptyWidget
@@ -45,11 +48,14 @@ table aligns header rows = vBox (map txt (line headerCells : rule : map line bod
     headerCells = map inlines header
     bodyCells = map (map inlines) rows
     widths = map (maximum . map Text.length) (transpose (headerCells : bodyCells))
-    line r = Text.stripEnd (Text.intercalate "  " (zipWith3 aligned (aligns ++ repeat M.AlignDefault) widths r))
+    line r = Text.stripEnd (Text.intercalate "  " (zipWith3 align (aligns ++ repeat M.AlignDefault) widths r))
     rule = Text.intercalate "  " [Text.replicate w "\x2500" | w <- widths]
-    aligned M.AlignRight w = Text.justifyRight w ' '
-    aligned M.AlignCenter w = Text.center w ' '
-    aligned _ w = Text.justifyLeft w ' '
+
+-- | Returns the cell padded to the width as the alignment says.
+align :: M.Alignment -> Int -> Text -> Text
+align M.AlignRight w = Text.justifyRight w ' '
+align M.AlignCenter w = Text.center w ' '
+align _ w = Text.justifyLeft w ' '
 
 listItem :: Text -> [M.Block] -> Widget n
 listItem bullet item = txt bullet <+> blocks item

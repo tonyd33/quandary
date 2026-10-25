@@ -294,7 +294,7 @@ cli =
               ]
     , testCase "show on an unknown id" $ withCopy $ \dir -> do
         r <- quandary dir ["show", "sync/nope"]
-        r @?= (ExitFailure 1, "", "quandary: unknown question sync/nope\n")
+        r @?= (ExitFailure 1, "", "quandary: unknown question or option sync/nope\n")
     , testCase "status gives bounds that say something" $ withCopy $ \dir -> do
         writeGraded dir
         (code, out, _) <- quandary dir ["status"]

@@ -15,6 +15,8 @@ build-type:    Simple
 tested-with:   GHC == 9.10.3
 extra-doc-files: README.md
 extra-source-files:
+  web/*.css
+  web/*.js
   web/vendor/**/*.js
   test/fixtures/**/*.md
   test/golden/*.txt

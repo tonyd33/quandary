@@ -18,20 +18,32 @@ import Data.Text qualified as Text
 score :: Text -> Text -> Maybe Int
 score query t = case Text.unpack (Text.toLower query) of
   [] -> Just 0
-  q : qs -> maximum (Nothing : foldl next (row q (repeat (Just 0)) (repeat Nothing)) qs)
+  q : qs -> maximum (Nothing : foldl nextRow (row q (repeat (Just 0)) (repeat Nothing)) qs)
   where
     cs = Text.unpack (Text.toLower t)
-    bases = 9 : map base cs
-    base c
-      | c == '/' = 9
-      | c `elem` ("-_." :: String) = 7
-      | otherwise = 1
-    next prev c = row c (earlier prev) (Nothing : prev)
-    earlier prev = [subtract (j - 1) <$> b | (j, b) <- zip [0 ..] (scanl max Nothing [(+ k) <$> p | (k, p) <- zip [0 ..] prev])]
-    row c before adjacent = zipWith4 (cell c) cs bases before adjacent
-    cell c x b before adjacent
-      | x /= c = Nothing
-      | otherwise = max ((+ b) <$> before) ((+ (b + 4)) <$> adjacent)
+    bases = 9 : map bonusAfter cs
+    nextRow prev c = row c (bestBefore prev) (Nothing : prev)
+    row c before adjacent = zipWith4 (matchCell c) cs bases before adjacent
+
+-- | Returns what matching the character right after this one scores.
+bonusAfter :: Char -> Int
+bonusAfter c
+  | c == '/' = 9
+  | c `elem` ("-_." :: String) = 7
+  | otherwise = 1
+
+-- | Returns, at each position, the best score of a match before it, less
+-- one for each character skipped since.
+bestBefore :: [Maybe Int] -> [Maybe Int]
+bestBefore prev = [subtract (j - 1) <$> b | (j, b) <- zip [0 ..] (scanl max Nothing [(+ k) <$> p | (k, p) <- zip [0 ..] prev])]
+
+-- | Returns the score of matching the query character at the id
+-- character, given its base score, the best match before it and the match
+-- right before it.
+matchCell :: Char -> Char -> Int -> Maybe Int -> Maybe Int -> Maybe Int
+matchCell c x b before adjacent
+  | x /= c = Nothing
+  | otherwise = max ((+ b) <$> before) ((+ (b + 4)) <$> adjacent)
 
 -- | Returns the items whose ids the query matches, best first, then
 -- shorter ids, then in order of id.

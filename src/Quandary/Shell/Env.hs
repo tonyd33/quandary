@@ -1,7 +1,6 @@
 module Quandary.Shell.Env
   ( Env (..)
   , analysis
-  , causes
   , withFresh
   , reportStale
   )
@@ -27,11 +26,6 @@ data Env = Env
 
 analysis :: Env -> IO Analysis
 analysis env = Analyse.analyse Cadical.cadical env.model env.point
-
-causes :: Env -> Set Literal -> OptionId -> Verdict -> IO [Set Literal]
-causes env rs opt Impossible = Analyse.whyAll Cadical.cadical env.model.space rs (Take opt)
-causes env rs opt Forced = Analyse.whyAll Cadical.cadical env.model.space rs (Refuse opt)
-causes _ _ _ Possible = pure []
 
 -- | Run the continuation on the named point's standing, or report the point stale.
 withFresh :: Env -> Text -> (Standing -> IO ExitCode) -> IO ExitCode

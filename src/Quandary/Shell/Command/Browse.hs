@@ -46,6 +46,7 @@ run dir point = Browse.withLive dir $ \live -> do
           , route = r
           , back = []
           , drawn = d
+          , bodies = Render.bodies d
           , focus = Focus {pane = Questions, option = Nothing, expanded = Set.empty}
           , overlay = Nothing
           , folded = True
@@ -94,10 +95,10 @@ key p Vty.KEnter = enter p
 key _ (Vty.KChar ' ') = selected >>= mapM_ toggle
 key _ Vty.KBS = goBack
 key _ (Vty.KChar 'p') = openPointPicker
-key _ (Vty.KChar 'g') = setOverlay (GoToPicker "" 0)
+key _ (Vty.KChar 'g') = openGoToPicker ""
 key _ (Vty.KChar 'w') = whatifOption >>= mapM_ (setOverlay . WhatifPicker)
 key _ (Vty.KChar 'z') = modify (\t -> t {folded = not t.folded})
-key _ (Vty.KChar 'u') = openRaiser
+key _ (Vty.KChar 'u') = openAbove
 key _ _ = pure ()
 
 overlayKey :: Overlay -> Vty.Key -> EventM Name Tui ()
@@ -112,13 +113,12 @@ overlayKey (PointPicker i) Vty.KEnter = do
   forM_ (names !? i) (open . StatusAt)
 overlayKey (GoToPicker t i) Vty.KDown = moveGoTo t i 1
 overlayKey (GoToPicker t i) Vty.KUp = moveGoTo t i (-1)
-overlayKey (GoToPicker t _) Vty.KBS = setOverlay (GoToPicker (Text.dropEnd 1 t) 0)
+overlayKey (GoToPicker t _) Vty.KBS = openGoToPicker (Text.dropEnd 1 t)
 overlayKey (GoToPicker t i) Vty.KEnter = do
-  found <- gets (\tui -> Browse.goToMatches t tui.drawn !? i)
+  matches <- gets (Browse.goToMatches t . (.drawn))
   closeOverlay
-  p <- gets (Browse.routePoint . (.route))
-  forM_ found (open . Browse.targetRoute p . snd)
-overlayKey (GoToPicker t _) (Vty.KChar c) = setOverlay (GoToPicker (Text.snoc t c) 0)
+  forM_ (matches !? Browse.clampIndex matches i) (\(_, target) -> openAt (`Browse.targetRoute` target))
+overlayKey (GoToPicker t _) (Vty.KChar c) = openGoToPicker (Text.snoc t c)
 overlayKey (WhatifPicker o) (Vty.KChar 'a') = suppose AcceptVerb o
 overlayKey (WhatifPicker o) (Vty.KChar 'd') = suppose DefeatVerb o
 overlayKey (WhatifPicker o) (Vty.KChar 'r') = do
@@ -138,23 +138,26 @@ openPointPicker = do
   t <- get
   setOverlay (PointPicker (fromMaybe 0 (elemIndex (Browse.routePoint t.route) (Browse.pointNames t.drawn))))
 
+-- | Open the go-to picker on the text typed, its best match selected.
+openGoToPicker :: Text -> EventM Name Tui ()
+openGoToPicker t = setOverlay (GoToPicker t 0)
+
 moveGoTo :: Text -> Int -> Int -> EventM Name Tui ()
 moveGoTo t i d = do
-  n <- gets (length . Browse.goToMatches t . (.drawn))
-  setOverlay (GoToPicker t (max 0 (min (n - 1) (i + d))))
+  matches <- gets (Browse.goToMatches t . (.drawn))
+  setOverlay (GoToPicker t (Browse.clampIndex matches (i + d)))
 
 movePointPicker :: Int -> Int -> EventM Name Tui ()
 movePointPicker i d = do
-  n <- gets (length . Browse.pointNames . (.drawn))
-  setOverlay (PointPicker (max 0 (min (n - 1) (i + d))))
+  names <- gets (Browse.pointNames . (.drawn))
+  setOverlay (PointPicker (Browse.clampIndex names (i + d)))
 
 -- | Close the overlay and show what supposing the verb of the option would
 -- move.
 suppose :: Verb -> OptionId -> EventM Name Tui ()
 suppose verb o = do
   closeOverlay
-  p <- gets (Browse.routePoint . (.route))
-  open (WhatifAt p [(verb, optionName o)])
+  openAt (\p -> WhatifAt p [(verb, optionName o)])
 
 setPane :: Pane -> EventM Name Tui ()
 setPane p = modify (\t -> t {focus = t.focus {pane = p}})
@@ -162,9 +165,9 @@ setPane p = modify (\t -> t {focus = t.focus {pane = p}})
 move :: Pane -> Int -> EventM Name Tui ()
 move Questions d =
   gets questionIds >>= \case
-    Just (shown, ids) -> do
+    Just (question, ids) -> do
       t <- get
-      forM_ (step d shown ids) $ \i -> goTo t.back (QuestionAt (Browse.routePoint t.route) i)
+      forM_ (step d question ids) $ \i -> goTo t.back (QuestionAt (Browse.routePoint t.route) i)
     Nothing -> scrollBody d
 move Options d =
   gets (\t -> Browse.pageOptions t.focus.expanded t.drawn) >>= \case
@@ -177,8 +180,8 @@ move Reading d = scrollBody d
 questionIds :: Tui -> Maybe (Maybe Id, [Id])
 questionIds t = do
   (m, s) <- Browse.pageStanding t.drawn
-  let shown = Browse.shownQuestion t.drawn
-  pure (shown, concatMap Browse.listedIds (Browse.listedQuestions t.folded m (Browse.routePoint t.route) s shown))
+  let question = Browse.shownQuestion t.drawn
+  pure (question, concatMap Browse.listedIds (Browse.listedQuestions t.folded m (Browse.routePoint t.route) s question))
 
 selectOption :: Int -> [OptionId] -> EventM Name Tui ()
 selectOption d os = do
@@ -204,22 +207,19 @@ enter Options = selected >>= mapM_ openOption
 enter Reading = pure ()
 
 openOption :: OptionId -> EventM Name Tui ()
-openOption o = do
-  p <- gets (Browse.routePoint . (.route))
-  open (OptionAt p (optionName o))
+openOption o = openAt (`OptionAt` optionName o)
 
-openQuestion :: Id -> EventM Name Tui ()
-openQuestion q = do
-  p <- gets (Browse.routePoint . (.route))
-  open (QuestionAt p q)
+openAbove :: EventM Name Tui ()
+openAbove = gets (questionAbove . (.drawn)) >>= mapM_ (\q -> openAt (`QuestionAt` q))
 
-openRaiser :: EventM Name Tui ()
-openRaiser = gets (up . (.drawn)) >>= mapM_ openQuestion
+-- | Open the route at the point shown.
+openAt :: (Text -> Route) -> EventM Name Tui ()
+openAt at = gets (Browse.routePoint . (.route)) >>= open . at
 
 -- | Returns the question of the first option raising the question shown,
 -- or the question of the option shown.
-up :: Drawn -> Maybe Id
-up d = case d.shown of
+questionAbove :: Drawn -> Maybe Id
+questionAbove d = case d.shown of
   Shown m (QuestionPage v) | (o :| _) : _ <- v.question.raisedBy -> questionOf m.space o
   Shown _ (OptionPage v) -> Just v.question.id
   _ -> Nothing
@@ -252,7 +252,7 @@ goTo :: [Route] -> Route -> EventM Name Tui ()
 goTo back r = do
   t <- get
   (r', d) <- liftIO (arrive t.live t.folded r)
-  put t {route = r', back, drawn = d, focus = t.focus {option = Nothing, expanded = Set.empty}}
+  put (shown d t {route = r', back, focus = t.focus {option = Nothing, expanded = Set.empty}})
 
 -- | Returns the route shown for the route and its page: a point's first
 -- listed question in place of its status.
@@ -271,8 +271,14 @@ refresh = do
   (r, d) <- liftIO (arrive t.live t.folded t.route)
   let kept = Set.fromList (Browse.pageOptions t.focus.expanded d)
   put
-    t
-      { route = r
-      , drawn = d
-      , focus = t.focus {option = mfilter (`Set.member` kept) t.focus.option, expanded = Set.intersection t.focus.expanded kept}
-      }
+    ( shown
+        d
+        t
+          { route = r
+          , focus = t.focus {option = mfilter (`Set.member` kept) t.focus.option, expanded = Set.intersection t.focus.expanded kept}
+          }
+    )
+
+-- | Returns the state showing the page.
+shown :: Drawn -> Tui -> Tui
+shown d t = t {drawn = d, bodies = Render.bodies d}

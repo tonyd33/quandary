@@ -23,6 +23,7 @@ import Quandary.Core.View
   , OptionView (..)
   , PointView (..)
   , QuestionView (..)
+  , RaisedOption (..)
   , Whatif (..)
   )
 import Quandary.Shell.Browse
@@ -60,7 +61,6 @@ routes =
       , OptionAt "current" "sync/git"
       , OptionAt "current" "sync/how.other"
       , Points
-      , GoTo "current" "pseqrp"
       , WhatifAt "edit-offline" []
       , WhatifAt
           "current"
@@ -113,6 +113,21 @@ pages =
           [idText o.raising.question.id | o <- v.row.objections] @?= ["conflict/shown", "sync/merge-conflicts"]
           v.causes @?= []
         _ -> assertFailure "not an option page"
+  , testCase "an option under a raised question carries its rank at the point" $ withCopy $ \dir -> do
+      let file = dir </> "points/current.md"
+      TextIO.readFile file >>= TextIO.writeFile file . Text.replace "defeat:\n" "prefer: {conflict/diff: 7}\ndefeat:\n"
+      d <- withLive dir (`page` QuestionAt "current" (Id "sync/how"))
+      case d.shown of
+        Shown _ (QuestionPage v) ->
+          [ (optionName c.option, rankValue <$> c.rank)
+          | r <- v.rows
+          , r.option == listed "sync/git"
+          , ob <- r.objections
+          , ob.raising.question.id == Id "conflict/shown"
+          , c <- ob.options
+          ]
+            @?= [("conflict/copy", Nothing), ("conflict/diff", Just 7), ("conflict/silent", Nothing), ("conflict/shown.other", Nothing)]
+        _ -> assertFailure "not a question page"
   , testCase "a question's id is no option" $
       pageAt (OptionAt "current" "sync/how") >>= \case
         NotFound t -> t @?= "unknown option sync/how"
@@ -198,6 +213,10 @@ server =
       [ (Just "127.0.0.1:8080", status200)
       , (Just "localhost:8080", status200)
       , (Just "localhost:9090", status403)
+      , (Just "192.168.1.20:8080", status200)
+      , (Just "[::1]:8080", status200)
+      , (Just "192.168.1.300:8080", status403)
+      , (Just "192.168.1:8080", status403)
       , (Just "evil.example:8080", status403)
       , (Just "evil.example", status403)
       , (Nothing, status403)

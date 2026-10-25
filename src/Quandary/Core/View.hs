@@ -16,6 +16,7 @@ module Quandary.Core.View
   , questionView
   , questionViewFrom
   , optionView
+  , optionDescription
   , statusBounds
   , statusGroups
   , choicesAt
@@ -24,11 +25,12 @@ module Quandary.Core.View
   )
 where
 
-import Control.Monad (mfilter)
 import Data.Foldable (toList)
+import Data.List (find)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (maybeToList)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -83,6 +85,7 @@ data Objection = Objection
 data RaisedOption = RaisedOption
   { option :: OptionId
   , verdict :: Verdict
+  , rank :: Maybe Rank
   , objections :: [Objection]
   }
   deriving (Eq, Show)
@@ -141,13 +144,14 @@ questionViewFrom m name a bs q =
     { point = name
     , question = q
     , analysis = a
-    , rows = map (optionRow m name a bs) (byPreference (preferenceAt m.points name) q)
+    , rows = map (optionRow m name ranks a bs) (byPreference ranks q)
     }
-
-optionRow :: Model -> Text -> Analysis -> Map OptionId Bounds -> OptionId -> OptionRow
-optionRow m name a bs = row
   where
     ranks = preferenceAt m.points name
+
+optionRow :: Model -> Text -> Map OptionId Rank -> Analysis -> Map OptionId Bounds -> OptionId -> OptionRow
+optionRow m name ranks a bs = row
+  where
     rulings = effective m.points name
     dominators = dominance m name bs
     row o =
@@ -162,7 +166,7 @@ optionRow m name a bs = row
         , dominated = domination bs o <$> Map.lookup o dominators
         , raises = raisedQuestions m.space (Set.singleton o)
         , objections = case standing a of
-            Just s -> objectionsTo m.space s o
+            Just s -> objectionsTo m.space ranks s o
             Nothing -> []
         }
 
@@ -173,40 +177,61 @@ data OptionView = OptionView
   , question :: Question
   , analysis :: Analysis
   , row :: OptionRow
-  , description :: Text
   , causes :: [Set Literal]
   -- ^ Empty when the option's own ruling is the only cause.
   }
 
--- | Returns the option of the question at the point, bounding the
--- question's options.
+-- | Returns the option's view at the point, with bounds over its
+-- question's options unless it is impossible.
 optionView :: Monad m => Solver m -> Model -> Text -> Analysis -> Question -> OptionId -> m OptionView
 optionView solver m name a q o = do
-  bs <- maybe (pure Map.empty) (\s -> bounds solver m name s (choices q)) (standing a)
-  let row = optionRow m name a bs o
-  cs <- maybe (pure []) (causes solver m name o) (mfilter (/= Possible) row.verdict)
-  let ownRuling = [Set.singleton l | Just (l, _, _) <- [row.ruling]]
+  (bs, cs) <- boundsAndCausesAt solver m name a q o
+  let row = optionRow m name (preferenceAt m.points name) a bs o
   pure
     OptionView
       { point = name
       , question = q
       , analysis = a
       , row
-      , description = case o of
-          Listed i -> maybe "" (\(_, opt) -> opt.description) (optionAt m.space i)
-          Other _ -> ""
-      , causes = if cs == ownRuling then [] else cs
+      , causes = beyondOwnRuling row cs
       }
+
+-- | Returns the bounds of the question's options when the option is
+-- possible or forced, and every set of rulings making it forced or
+-- impossible.
+boundsAndCausesAt ::
+  Monad m => Solver m -> Model -> Text -> Analysis -> Question -> OptionId -> m (Map OptionId Bounds, [Set Literal])
+boundsAndCausesAt solver m name a q o = case (standing a, verdictAt a o) of
+  (Just s, Just Possible) -> (\bs -> (bs, [])) <$> bounds solver m name s (choices q)
+  (Just s, Just Forced) -> boundsAndCauses solver m name s (choices q) o Forced
+  (_, Just Impossible) -> (,) Map.empty <$> causes solver m name o Impossible
+  _ -> pure (Map.empty, [])
+
+-- | Returns the sets of rulings, none when the option's own ruling is the
+-- only one.
+beyondOwnRuling :: OptionRow -> [Set Literal] -> [Set Literal]
+beyondOwnRuling row cs
+  | cs == ownRuling = []
+  | otherwise = cs
+  where
+    ownRuling = [Set.singleton l | (l, _, _) <- maybeToList row.ruling]
+
+-- | Returns the option's description, empty for an implicit other.
+optionDescription :: OptionView -> Text
+optionDescription v = maybe "" (.description) (find (\o -> Listed o.id == v.row.option) v.question.options)
 
 domination :: Map OptionId Bounds -> OptionId -> OptionId -> Domination
 domination bs o p = Domination p (bs Map.! o).hi (bs Map.! p).lo
 
-objectionsTo :: Space -> Standing -> OptionId -> [Objection]
-objectionsTo space s o =
+objectionsTo :: Space -> Map OptionId Rank -> Standing -> OptionId -> [Objection]
+objectionsTo space ranks s o =
   [ Objection
       { raising = r
       , state = s.states Map.! r.question.id
-      , options = [RaisedOption c (s.verdicts Map.! c) (objectionsTo space s c) | c <- listedThenOther r.question]
+      , options =
+          [ RaisedOption c (s.verdicts Map.! c) (Map.lookup c ranks) (objectionsTo space ranks s c)
+          | c <- listedThenOther r.question
+          ]
       }
   | r <- raisedQuestions space (Set.singleton o)
   ]

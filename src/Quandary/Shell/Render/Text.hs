@@ -5,17 +5,17 @@ module Quandary.Shell.Render.Text
   , showOption
   , optionTitle
   , optionFacts
-  , rulingVerb
-  , rulingSource
   , rulingSummary
-  , valueText
+  , valueChunks
   , choiceNote
-  , pickText
-  , assessmentNote
-  , gradeName
-  , designVerb
   , why
-  , because
+  , Chunk (..)
+  , plain
+  , Because (..)
+  , RulingSet (..)
+  , optionCauses
+  , raisersChunks
+  , coRaisers
   , ruled
   , movedLines
   , whatifResult
@@ -31,6 +31,14 @@ module Quandary.Shell.Render.Text
   , diff
   , verdictText
   , stateText
+  , Mark (..)
+  , mark
+  , groupHelp
+  , verdictHelp
+  , stateHelp
+  , markHelp
+  , takenHelp
+  , boundsHelp
   , tshow
   , questionTitle
   , stateSuffix
@@ -38,6 +46,8 @@ module Quandary.Shell.Render.Text
   , rowMark
   , rowDetail
   , rowNotes
+  , rankText
+  , rankChunks
   , raisedTitle
   , coRaiserText
   , staleLines
@@ -50,7 +60,7 @@ module Quandary.Shell.Render.Text
 where
 
 import Data.Foldable (toList)
-import Data.List (sortOn, transpose, (!?))
+import Data.List (intercalate, intersperse, sortOn, transpose, (!?))
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -183,10 +193,25 @@ groupTitle ClosedGroup = "closed"
 groupTitle DeferredGroup = "deferred"
 groupTitle DormantGroup = "dormant"
 
+groupHelp :: GroupKind -> Text
+groupHelp Frontier = "Open questions in the order to decide them, each with the keys of its options still possible."
+groupHelp TakenMore = "Open questions with an option taken and more still possible."
+groupHelp RaisedIfTaken = "Open questions only an option not yet taken raises, with the options raising them."
+groupHelp ClosedGroup = "Questions with nothing left to decide at this point."
+groupHelp DeferredGroup = "Questions this point sets aside with `defer`."
+groupHelp DormantGroup = "Questions live in no design reaching this point."
+
+takenHelp :: Text
+takenHelp = "Options every design reaching this point takes."
+
+boundsHelp :: Text
+boundsHelp =
+  "lo..hi: the best design's value counting every ungraded option at the lowest grade, then at the highest. [N]: the rank `prefer` gave the option, 0 to 10."
+
 -- | Returns what status shows beside a question.
 entryDetail :: Space -> Detail -> Maybe Text
 entryDetail space (Choosing cs) = Just (Text.unwords (choiceChunks space cs))
-entryDetail _ (RaisedIf rs) = Just ("by " <> Text.intercalate ", " (map raiserText rs))
+entryDetail _ (RaisedIf rs) = Just ("by " <> plain (raisersChunks rs))
 entryDetail _ (Took []) = Nothing
 entryDetail _ (Took os) = Just (Text.intercalate ", " (map key os))
 entryDetail _ NoDetail = Nothing
@@ -217,16 +242,16 @@ choiceChunks space cs = case (map (choiceText space) cs.possible, map key cs.tak
 -- | Returns the option's key, rank and bounds, the bounds only when they
 -- leave out some grade.
 choiceText :: Space -> Choice -> Text
-choiceText space c = Text.unwords (filter (not . Text.null) [key c.option, choiceNote space c])
+choiceText space c = Text.unwords (filter (not . Text.null) [key c.option, plain (choiceNote space c)])
 
 -- | Returns the option's rank and bounds, the bounds only when they leave
 -- out some grade.
-choiceNote :: Space -> Choice -> Text
-choiceNote space c = Text.unwords (filter (not . Text.null) [rankText c.rank, value])
+choiceNote :: Space -> Choice -> [Chunk]
+choiceNote space c = joined " " [rankChunks c.rank, value]
   where
     value = case c.bounds of
-      Just b | b.lo > 0 || b.hi < topGrade space -> boundsText space b
-      _ -> ""
+      Just b | b.lo > 0 || b.hi < topGrade space -> [Words (boundsText space b)]
+      _ -> []
 
 takenChunks :: [Text] -> [Text]
 takenChunks ts = case commas ts of
@@ -256,13 +281,41 @@ columns rows = [Text.stripEnd (mconcat (zipWith (\w c -> Text.justifyLeft w ' ' 
   where
     widths = map ((+ 2) . maximum . map Text.length) (transpose rows)
 
+-- | A piece of a line: words, an option, or a rank.
+data Chunk = Words Text | Named OptionId | Ranked Rank
+
+-- | Returns the chunks as text, each option by its id, each rank in
+-- brackets.
+plain :: [Chunk] -> Text
+plain = foldMap chunkText
+
+chunkText :: Chunk -> Text
+chunkText (Words t) = t
+chunkText (Named o) = optionName o
+chunkText (Ranked n) = "[" <> tshow (rankValue n) <> "]"
+
+-- | Returns the words as a piece, none when they are empty.
+wordsOf :: Text -> [Chunk]
+wordsOf t = [Words t | not (Text.null t)]
+
+-- | Returns the pieces that are not empty, the separator between each.
+joined :: Text -> [[Chunk]] -> [Chunk]
+joined separator = intercalate [Words separator] . filter (not . null)
+
+-- | Returns the raisers comma-separated.
+raisersChunks :: [NonEmpty OptionId] -> [Chunk]
+raisersChunks = intercalate [Words ", "] . map raiserChunks
+
 -- | Returns the options a raiser takes together, joined by `with`.
-raiserText :: NonEmpty OptionId -> Text
-raiserText g = Text.intercalate " with " (map optionName (toList g))
+raiserChunks :: NonEmpty OptionId -> [Chunk]
+raiserChunks g = intersperse (Words " with ") (map Named (toList g))
 
 -- | Returns the option's rank in brackets, or nothing when unranked.
 rankText :: Maybe Rank -> Text
-rankText = maybe "" (\n -> "[" <> tshow (rankValue n) <> "]")
+rankText = plain . rankChunks
+
+rankChunks :: Maybe Rank -> [Chunk]
+rankChunks = maybe [] (\n -> [Ranked n])
 
 -- | Returns the items comma-separated, in indented lines of at most 80
 -- columns.
@@ -295,21 +348,24 @@ raisedTitle r = idText r.question.id <> ": " <> r.question.title
 -- | Returns the lines naming the options that raise the question alongside,
 -- none when the options raise it alone, under a line indented as given.
 coRaiserLines :: Text -> Raising -> [Text]
-coRaiserLines indent r = maybe [] (\(lead, cs) -> filled (indent <> "  " <> lead) (indent <> "    ") (commas cs)) (coRaisers r)
+coRaiserLines indent r =
+  maybe [] (\(lead, cs) -> filled (indent <> "  " <> lead) (indent <> "    ") (commas (map plain cs))) (coRaisers r)
 
 -- | Returns the options that raise the question alongside on one line.
 coRaiserText :: Raising -> Maybe Text
-coRaiserText r = (\(lead, cs) -> lead <> Text.intercalate ", " cs) <$> coRaisers r
+coRaiserText r = (\(lead, cs) -> lead <> Text.intercalate ", " (map plain cs)) <$> coRaisers r
 
-coRaisers :: Raising -> Maybe (Text, [Text])
+-- | Returns the words leading the options that raise the question
+-- alongside, and each raiser among them.
+coRaisers :: Raising -> Maybe (Text, [[Chunk]])
 coRaisers r = case r.with of
   [] -> Nothing
   [g] -> Just ("with ", [coRaiser g])
   gs -> Just ("with any of ", map coRaiser gs)
 
-coRaiser :: NonEmpty OptionId -> Text
-coRaiser (o :| []) = optionName o
-coRaiser g = "(" <> raiserText g <> ")"
+coRaiser :: NonEmpty OptionId -> [Chunk]
+coRaiser (o :| []) = [Named o]
+coRaiser g = Words "(" : raiserChunks g ++ [Words ")"]
 
 -- | Returns the chunks space-separated, breaking before any chunk that
 -- would pass column 80, the first line opening with the first prefix and
@@ -342,7 +398,7 @@ optionLines space name rows =
   zipWith
     (\r line -> Text.justifyLeft 12 ' ' (rowMark r) <> line)
     rows
-    (columns [[optionName r.option, rowDetail space name r] | r <- rows])
+    (columns [[optionName r.option, plain (rowDetail space name r)] | r <- rows])
 
 -- | Returns the option's ruling, or else its verdict.
 rowMark :: OptionRow -> Text
@@ -350,16 +406,16 @@ rowMark r = markText (mark r.ruling r.verdict)
 
 -- | Returns the option's title, bounds and rank, and its ruling's point
 -- and reason.
-rowDetail :: Space -> Text -> OptionRow -> Text
-rowDetail space name r = Text.intercalate "  " (filter (not . Text.null) [fromMaybe "" r.title, valueText space r, note])
+rowDetail :: Space -> Text -> OptionRow -> [Chunk]
+rowDetail space name r = joined "  " [wordsOf (fromMaybe "" r.title), valueChunks space r, wordsOf note]
   where
     note = maybe "" (rulingNote name) r.ruling
 
 -- | Returns the option's bounds and rank.
-valueText :: Space -> OptionRow -> Text
-valueText space r = Text.intercalate "  " (filter (not . Text.null) [value, rankText r.rank])
+valueChunks :: Space -> OptionRow -> [Chunk]
+valueChunks space r = joined "  " [value, rankChunks r.rank]
   where
-    value = maybe "" (("value " <>) . boundsText space) r.bounds
+    value = maybe [] (\b -> [Words ("value " <> boundsText space b)]) r.bounds
 
 -- | Returns the ruling's reason, after the point it comes from unless that
 -- is the point given.
@@ -369,40 +425,52 @@ rulingNote name (_, p, given)
   | otherwise = Text.intercalate ": " (("in " <> p) : map reasonText (maybeToList given.reason))
 
 -- | Returns the option's grade and, when dominated, its dominator.
-rowNotes :: Space -> OptionRow -> [Text]
-rowNotes space r = maybeToList (assessmentNote <$> r.assessment) ++ maybeToList (dominationNote space <$> r.dominated)
+rowNotes :: Space -> OptionRow -> [[Chunk]]
+rowNotes space r =
+  [[Words (assessmentNote a)] | a <- maybeToList r.assessment] ++ [dominationNote space d | d <- maybeToList r.dominated]
 
 assessmentNote :: Assessment -> Text
 assessmentNote a = "graded " <> a.grade <> (if a.unverified then ", unverified" else "") <> maybe "" (": " <>) a.why
 
-dominationNote :: Space -> Domination -> Text
+dominationNote :: Space -> Domination -> [Chunk]
 dominationNote space d =
-  "dominated: at best "
-    <> gradeName space d.atBest
-    <> ", below "
-    <> optionName d.by
-    <> " at worst "
-    <> gradeName space d.byAtWorst
+  [ Words ("dominated: at best " <> gradeName space d.atBest <> ", below ")
+  , Named d.by
+  , Words (" at worst " <> gradeName space d.byAtWorst)
+  ]
 
 -- | An option's standing at a point: its ruling there, or else its verdict.
 data Mark = Accepted | Defeated | Judged (Maybe Verdict)
   deriving (Eq)
 
 mark :: Maybe (Literal, Text, Ruling) -> Maybe Verdict -> Mark
-mark ruling v = case ruling of
-  Just (Take _, _, _) -> Accepted
-  Just (Refuse _, _, _) -> Defeated
-  Nothing -> Judged v
+mark (Just (l, _, _)) _ = ruledMark l
+mark Nothing v = Judged v
+
+ruledMark :: Literal -> Mark
+ruledMark (Take _) = Accepted
+ruledMark (Refuse _) = Defeated
 
 markText :: Mark -> Text
 markText Accepted = "accepted"
 markText Defeated = "defeated"
 markText (Judged v) = maybe "" verdictText v
 
+markHelp :: Mark -> Text
+markHelp Accepted = "Accepted by a ruling at this point or one it extends."
+markHelp Defeated = "Defeated by a ruling at this point or one it extends."
+markHelp (Judged (Just v)) = verdictHelp v
+markHelp (Judged Nothing) = "The point is stale: no design reaches it."
+
 verdictText :: Verdict -> Text
 verdictText Forced = "forced"
 verdictText Possible = "possible"
 verdictText Impossible = "impossible"
+
+verdictHelp :: Verdict -> Text
+verdictHelp Forced = "Every design reaching this point takes it."
+verdictHelp Possible = "Some design reaching this point takes it, and some does not."
+verdictHelp Impossible = "No design reaching this point takes it."
 
 stateText :: QuestionState -> Text
 stateText (Open _) = "open"
@@ -410,13 +478,19 @@ stateText Closed = "closed"
 stateText Deferred = "deferred"
 stateText Dormant = "dormant"
 
+stateHelp :: QuestionState -> Text
+stateHelp (Open _) = "Live in some design reaching this point, and neither closed nor deferred."
+stateHelp Closed = "One option forced (pick: one), or none possible (pick: any)."
+stateHelp Deferred = "This point leaves it off the frontier."
+stateHelp Dormant = "Live in no design reaching this point."
+
 -- | Returns the question in full.
 showQuestion :: Space -> QuestionView -> Text
 showQuestion space v =
   Text.unlines $
-    [questionTitle v.analysis v.question, questionShape v.question, "", v.question.description, ""]
+    [questionTitle v.analysis v.question, plain (questionShape v.question), "", v.question.description, ""]
       ++ concat
-        [ line : map ("  " <>) (rowNotes space r) ++ raisesLines "  " r
+        [ line : map (("  " <>) . plain) (rowNotes space r) ++ raisesLines "  " r
         | (r, line) <- zip v.rows (optionLines space v.point v.rows)
         ]
 
@@ -431,11 +505,15 @@ showOption m v =
   Text.unlines $
     [optionTitle v, "in " <> questionTitle v.analysis v.question]
       ++ optionFacts m v
-      ++ paragraph [v.description | not (Text.null v.description)]
+      ++ paragraph [description | not (Text.null description)]
       ++ paragraph (raisesLines "" v.row)
   where
-    paragraph [] = []
-    paragraph ls = "" : ls
+    description = optionDescription v
+
+-- | Returns the lines after an empty one, none when there are none.
+paragraph :: [Text] -> [Text]
+paragraph [] = []
+paragraph ls = "" : ls
 
 -- | Returns the option's id and title with its ruling, or else its verdict.
 optionTitle :: OptionView -> Text
@@ -451,19 +529,27 @@ optionTitle v = optionName v.row.option <> maybe "" (": " <>) v.row.title <> sta
 optionFacts :: Model -> OptionView -> [Text]
 optionFacts m v =
   maybe [] (pure . rulingSummary v.point) v.row.ruling
-    ++ maybe [] (\verdict -> because m v.point (verdictText verdict) verdict v.row.option v.causes) causeVerdict
-    ++ filter (not . Text.null) [valueText m.space v.row]
-    ++ rowNotes m.space v.row
-  where
-    causeVerdict
-      | null v.causes = Nothing
-      | otherwise = v.row.verdict
+    ++ maybe [] becauseLines (optionCauses m v)
+    ++ lineOf (valueChunks m.space v.row)
+    ++ concatMap lineOf (rowNotes m.space v.row)
+
+-- | Returns the chunks as a line, none when there are none.
+lineOf :: [Chunk] -> [Text]
+lineOf [] = []
+lineOf cs = [plain cs]
+
+-- | Returns why the option is forced or impossible, unless its own ruling
+-- is the only cause.
+optionCauses :: Model -> OptionView -> Maybe Because
+optionCauses m v = case v.row.verdict of
+  Just verdict | not (null v.causes) -> Just (because m v.point (verdictText verdict) verdict v.row.option v.causes)
+  _ -> Nothing
 
 -- | Returns the ruling's verb, the point it comes from unless that is the
 -- point given, and its reason.
 rulingSummary :: Text -> (Literal, Text, Ruling) -> Text
 rulingSummary name (l, p, given) =
-  markText (mark (Just (l, p, given)) Nothing)
+  markText (ruledMark l)
     <> (if p == name then "" else " in " <> p)
     <> maybe "" ((": " <>) . reasonText) given.reason
 
@@ -473,16 +559,15 @@ questionTitle a q = idText q.id <> ": " <> q.title <> stateSuffix a q
 
 -- | Returns the question's state in brackets.
 stateSuffix :: Analysis -> Question -> Text
-stateSuffix a q = case a of
-  Fresh s -> maybe "" (\st -> " [" <> stateText st <> "]") (Map.lookup q.id s.states)
-  StaleAt _ -> " [stale point]"
+stateSuffix (Fresh s) q = maybe "" (\st -> " [" <> stateText st <> "]") (Map.lookup q.id s.states)
+stateSuffix (StaleAt _) _ = " [stale point]"
 
 -- | Returns the question's pick and raisers.
-questionShape :: Question -> Text
+questionShape :: Question -> [Chunk]
 questionShape q =
-  "pick: " <> pickText q.pick <> case q.raisedBy of
-    [] -> ", a root"
-    rs -> ", raised by " <> Text.intercalate ", " (map raiserText rs)
+  Words ("pick: " <> pickText q.pick) : case q.raisedBy of
+    [] -> [Words ", a root"]
+    rs -> Words ", raised by " : raisersChunks rs
 
 pickText :: Pick -> Text
 pickText One = "one"
@@ -492,15 +577,33 @@ pickText Any = "any"
 why :: Model -> Text -> OptionId -> Verdict -> [Set Literal] -> Text
 why m name o v cores = case v of
   Possible -> optionName o <> " is possible\n"
-  _ -> Text.unlines (because m name (optionName o <> " is " <> verdictText v) v o cores)
+  _ -> Text.unlines (becauseLines (because m name (optionName o <> " is " <> verdictText v) v o cores))
 
--- | Returns the lines saying which sets of rulings give the option its
--- verdict, under the given opening.
-because :: Model -> Text -> Text -> Verdict -> OptionId -> [Set Literal] -> [Text]
-because _ _ opening _ _ [] = [opening]
+-- | Why an option has its verdict.
+data Because
+  = -- | No valid design gives it another, whatever the rulings.
+    Regardless [Chunk]
+  | -- | Each set of rulings giving it the verdict.
+    Sets [RulingSet]
+
+-- | A set of rulings, each a line, under its heading.
+data RulingSet = RulingSet
+  { heading :: Text
+  , rulings :: [[Chunk]]
+  }
+
+-- | Returns which sets of rulings give the option its verdict, under the
+-- given opening.
+because :: Model -> Text -> Text -> Verdict -> OptionId -> [Set Literal] -> Because
+because _ _ opening _ _ [] = Sets [RulingSet opening []]
 because m name opening v o cores
-  | any Set.null cores = ["no valid design " <> designVerb v <> " " <> optionName o <> ", whatever the rulings"]
-  | otherwise = conflictLines m name (opening <> " because of:") "and because of:" cores
+  | any Set.null cores =
+      Regardless [Words ("no valid design " <> designVerb v <> " "), Named o, Words ", whatever the rulings"]
+  | otherwise = Sets (conflicts m name (opening <> " because of:") "and because of:" cores)
+
+becauseLines :: Because -> [Text]
+becauseLines (Regardless cs) = [plain cs]
+becauseLines (Sets sets) = setLines sets
 
 -- | Returns what no valid design does to an option with the verdict.
 designVerb :: Verdict -> Text
@@ -508,7 +611,10 @@ designVerb Forced = "refuses"
 designVerb _ = "takes"
 
 rulingLine :: Model -> Text -> Literal -> Text
-rulingLine m name l = rulingVerb l <> " " <> optionName (optionOf l) <> rulingSource m name l
+rulingLine m name l = plain (rulingChunks m name l)
+
+rulingChunks :: Model -> Text -> Literal -> [Chunk]
+rulingChunks m name l = [Words (rulingVerb l <> " "), Named (optionOf l), Words (rulingSource m name l)]
 
 rulingVerb :: Literal -> Text
 rulingVerb (Take _) = "accept"
@@ -616,8 +722,14 @@ staleLines m name = conflictLines m name "stale: no design holds these rulings:"
 -- | Returns each set of rulings under its heading, the first heading
 -- before the first set and the second before each later one.
 conflictLines :: Model -> Text -> Text -> Text -> [Set Literal] -> [Text]
-conflictLines m name first next cores =
-  concat [h : map (("  " <>) . rulingLine m name) (Set.toList c) | (h, c) <- zip (first : repeat next) cores]
+conflictLines m name first next cores = setLines (conflicts m name first next cores)
+
+conflicts :: Model -> Text -> Text -> Text -> [Set Literal] -> [RulingSet]
+conflicts m name first next cores =
+  [RulingSet h (map (rulingChunks m name) (Set.toList c)) | (h, c) <- zip (first : repeat next) cores]
+
+setLines :: [RulingSet] -> [Text]
+setLines sets = concat [s.heading : map (("  " <>) . plain) s.rulings | s <- sets]
 
 editError :: EditError -> Text
 editError (NotRuled o) = optionName o <> " has no ruling to reopen\n"
@@ -705,11 +817,12 @@ stepLines name step = ruled step.edit step.applied : map ("  " <>) (unstated ++ 
 -- after it, whichever the remark is about.
 remark :: Model -> Model -> Text -> Remark -> [Text]
 remark before _ name (AlreadyDecided o v cores) =
-  because before name (optionName o <> " was already " <> verdictText v) v o shown
+  becauseLines (because before name (optionName o <> " was already " <> verdictText v) v o shown)
     ++ ["and " <> tshow (length rest) <> " more: quandary why " <> optionName o | not (null rest)]
   where
     (shown, rest) = splitAt 1 cores
-remark _ after name (StillDecided o v cores) = because after name (optionName o <> " is still " <> verdictText v) v o cores
+remark _ after name (StillDecided o v cores) =
+  becauseLines (because after name (optionName o <> " is still " <> verdictText v) v o cores)
 remark _ _ _ (ReasonChanged old new) = ["reason: " <> reasonOrNone old <> " -> " <> reasonOrNone new]
 remark _ _ _ (AlsoRuledIn p) = ["also ruled so in " <> p]
 remark _ _ _ (CommitsToRaiser r) = ["commits to raiser " <> optionName r <> ", which nothing else rules"]
