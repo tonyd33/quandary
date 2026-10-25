@@ -25,6 +25,7 @@ import Quandary.Core.View
 import Quandary.Core.View qualified as View
 import Quandary.Shell.Browse
   ( Drawn (..)
+  , Finder (..)
   , Focus (..)
   , Listing (..)
   , Overlay (..)
@@ -38,7 +39,7 @@ import Quandary.Shell.Markdown qualified as Markdown
 import Quandary.Shell.Render.Markdown (codeAttr, headingAttr, markdown)
 import Quandary.Shell.Render.Text qualified as Render
 
-data Name = QuestionList | OptionList | BodyView | PointList | WhatifView | GoToList
+data Name = QuestionList | OptionList | BodyView | PointList | WhatifView | FindList
   deriving (Eq, Ord, Show)
 
 selectedAttr, dimAttr, focusedAttr :: AttrName
@@ -132,6 +133,7 @@ pageWidget f parsed d = case d.shown of
     GraphPage {} -> note "graph" "serve draws the graph"
     BoxPage {} -> note "box" "serve draws the box"
     RulingsPage {} -> note "rulings" "serve lists the rulings"
+    SearchPage {} -> note "search" "/ searches"
     RecordPage {} -> note "record" "serve records from the box"
     RecordedPage {} -> note "record" "serve records from the box"
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
@@ -299,17 +301,25 @@ overlayWidget t (WhatifPicker o) =
           <> whatifKeys (any Browse.reopenable (Browse.pageRow t.drawn o))
           <> "esc cancel "
       )
-overlayWidget t (GoToPicker typed i) =
-  centerLayer . framed "go to" . hLimit 60 $
+overlayWidget t (FindPicker finder typed i) =
+  centerLayer . framed (finderTitle finder) . hLimit (finderWidth finder) $
     vBox
       [ txt (" > " <> typed)
-      , vLimit (min 15 (max 1 (length matches))) . viewport GoToList Vertical . vBox $
+      , vLimit (min 15 (max 1 (length matches))) . viewport FindList Vertical . vBox $
           [highlighted (n == selected) (padRight Max (txt (padded name))) | (n, (name, _)) <- zip [0 ..] matches]
       , withAttr dimAttr (txt " up/down move  enter open  esc cancel ")
       ]
   where
-    matches = Browse.goToMatches typed t.drawn
+    matches = Browse.found finder typed t
     selected = Browse.clampIndex matches i
+
+finderTitle :: Finder -> Text
+finderTitle ById = "go to"
+finderTitle ByText = "search"
+
+finderWidth :: Finder -> Int
+finderWidth ById = 60
+finderWidth ByText = 100
 
 -- | Returns the raised option's verdict, id and rank.
 objectionLine :: RaisedOption -> Text

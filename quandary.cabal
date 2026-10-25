@@ -87,6 +87,7 @@ library
     Quandary.Shell.Render.Tui
     Quandary.Shell.Resolve
     Quandary.Shell.Rule
+    Quandary.Shell.Search
     Quandary.Shell.Serve
     Quandary.Shell.Solver.Cadical
     Quandary.Shell.Storage.Files

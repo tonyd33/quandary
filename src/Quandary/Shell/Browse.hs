@@ -12,6 +12,7 @@ module Quandary.Shell.Browse
   , Pane (..)
   , Focus (..)
   , Overlay (..)
+  , Finder (..)
   , Listing (..)
   , routePoint
   , routeTitle
@@ -29,7 +30,7 @@ module Quandary.Shell.Browse
   , targetRoute
   , goToRoute
   , record
-  , goToMatches
+  , found
   , clampIndex
   , listedQuestions
   , listedIds
@@ -67,9 +68,12 @@ import Quandary.Core.View qualified as View
 import Quandary.Shell.Fuzzy qualified as Fuzzy
 import Quandary.Shell.Markdown qualified as Markdown
 import Quandary.Shell.Render.Graph qualified as Graph
+import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Resolve (Verb)
 import Quandary.Shell.Resolve qualified as Resolve
 import Quandary.Shell.Rule qualified as Rule
+import Quandary.Shell.Search (Results, Target (..))
+import Quandary.Shell.Search qualified as Search
 import Quandary.Shell.Solver.Cadical (cadical)
 import Quandary.Shell.Storage.Files (FileProblem (..))
 import Quandary.Shell.Storage.Files qualified as Files
@@ -83,6 +87,8 @@ data Route
   | OptionAt Text Text
   | Points
   | RulingsAt Text
+  | -- | The search for the text at the point.
+    SearchAt Text Text
   | WhatifAt Text [(Verb, Text)]
   | GraphAt Text Dead
   | -- | Played when it holds suppositions, even none.
@@ -98,6 +104,7 @@ routePoint (QuestionAt p _) = p
 routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
 routePoint (RulingsAt p) = p
+routePoint (SearchAt p _) = p
 routePoint (WhatifAt p _) = p
 routePoint (GraphAt p _) = p
 routePoint (BoxAt p _ _) = p
@@ -109,6 +116,7 @@ routeTitle (QuestionAt p q) = idText q <> " at " <> p
 routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
 routeTitle (RulingsAt p) = "rulings at " <> p
+routeTitle (SearchAt p _) = "search at " <> p
 routeTitle (WhatifAt p _) = "whatif at " <> p
 routeTitle (GraphAt p _) = "graph at " <> p
 routeTitle (BoxAt p _ Nothing) = "box at " <> p
@@ -122,6 +130,7 @@ data Page
   | PointsPage [PointView]
   | -- | The point's rulings, each with the point it comes from.
     RulingsPage Text [(Literal, Text, Ruling)]
+  | SearchPage Text Text Results
   | WhatifPage Text [Supposition] (Either EditError Whatif)
   | GraphPage Text Dead Graph.Graph
   | BoxPage Box
@@ -303,6 +312,7 @@ build b (BoxAt p dead (Just ws)) = atPoint b.model p $ case traverse (supposed b
     Left _ -> pure (NotFound "a supposition does not apply at the point")
     Right models -> BoxPage <$> playedBox b p dead ws models
 build b (RecordAt p ws) = atPoint b.model p (pure (RecordPage p ws))
+build b (SearchAt p t) = atPoint b.model p (pure (SearchPage p t (Search.search b.model p t)))
 build b (RulingsAt p) = atPoint b.model p (pure (RulingsPage p (Rulings.orderedRulings b.model.points p)))
 build b Points = PointsPage . View.pointViews b.model <$> staleNames b
 build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
@@ -414,8 +424,13 @@ data Focus = Focus
 
 -- | A picker over the current page: the points, at the index selected;
 -- what to suppose of an option; or the text typed, with the index
--- selected among the ids it matches.
-data Overlay = PointPicker Int | WhatifPicker OptionId | GoToPicker Text Int
+-- selected among what it finds.
+data Overlay = PointPicker Int | WhatifPicker OptionId | FindPicker Finder Text Int
+
+-- | How a picker finds what the text names: by id, or by searching ids,
+-- titles and text.
+data Finder = ById | ByText
+  deriving (Eq, Show)
 
 -- | A status group in the question list: its questions, or how many it
 -- holds when folded.
@@ -528,23 +543,16 @@ recordedEdit space (v, t, r) = case (Resolve.supposing space v t, parseReason r)
   (Just (Suppose (Refuse _)), Nothing) -> Left (NoReason t)
   (Just (Apply e), _) -> Right (Rule e)
 
--- | What going to an id opens.
-data Target = ToQuestion Id | ToOption OptionId
-  deriving (Eq, Show)
-
--- | Returns every question and option id, as written, with what it opens.
-targets :: Space -> [(Text, Target)]
-targets space =
-  concat
-    [ (idText q.id, ToQuestion q.id) : [(optionName o, ToOption o) | o <- choices q]
-    | q <- Map.elems space.questions
-    ]
-
--- | Returns the ids of the shown space the text matches, best first.
-goToMatches :: Text -> Drawn -> [(Text, Target)]
-goToMatches t d = case d.shown of
-  Shown m _ -> Fuzzy.ranked t (targets m.space)
+-- | Returns what the picker's text finds in the space shown at its
+-- point, best first, each with the line describing it.
+found :: Finder -> Text -> Tui -> [(Text, Target)]
+found f t tui = case tui.drawn.shown of
+  Shown m _ -> matching f m (routePoint tui.route) t
   Problems _ -> []
+
+matching :: Finder -> Model -> Text -> Text -> [(Text, Target)]
+matching ById m _ t = Fuzzy.ranked t (Search.targets m.space)
+matching ByText m p t = Render.searchLines (Search.search m p t)
 
 -- | Returns the route to the id at the point the text matches best, else
 -- the page saying why there is none.
@@ -555,7 +563,7 @@ goToRoute live p t = do
     Unusable ps -> Left (Drawn rev (Problems ps))
     Usable m
       | not (hasPoint m p) -> Left (Drawn rev (Shown m (NotFound ("unknown point " <> p))))
-      | (_, target) : _ <- Fuzzy.ranked t (targets m.space) -> Right (targetRoute p target)
+      | (_, target) : _ <- matching ById m p t -> Right (targetRoute p target)
       | otherwise -> Left (Drawn rev (Shown m (NotFound ("no id matches " <> t))))
 
 -- | Returns the index clamped to the list's indices, 0 when it is empty.

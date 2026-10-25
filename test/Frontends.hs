@@ -54,6 +54,7 @@ import Quandary.Shell.Browse
 import Quandary.Shell.Fuzzy (ranked, score)
 import Quandary.Shell.Render.Html (document, link, markdown)
 import Quandary.Shell.Resolve (Verb (..))
+import Quandary.Shell.Search (Hit (..), Place (..), Results (..), Snippet (..))
 import Quandary.Shell.Serve (app, route)
 import Quandary.Shell.Storage.Files (FileProblem (..))
 import System.Directory (createDirectoryIfMissing)
@@ -87,6 +88,8 @@ routes =
       , OptionAt "current" "sync/how.other"
       , Points
       , RulingsAt "current"
+      , SearchAt "current" "merge screen"
+      , SearchAt "current" ""
       , GraphAt "current" HideDead
       , GraphAt "current" ShowDead
       , BoxAt "current" HideDead Nothing
@@ -114,6 +117,12 @@ unversioned t = case LazyText.breakOn "?v=" t of
   (kept, rest)
     | LazyText.null rest -> kept
     | otherwise -> kept <> unversioned (LazyText.dropWhile isHexDigit (LazyText.drop 3 rest))
+
+searched :: Text.Text -> IO Results
+searched t =
+  pageAt (SearchAt "current" t) >>= \case
+    SearchPage _ _ r -> pure r
+    _ -> assertFailure "not a search page"
 
 drawnAt :: Route -> IO Drawn
 drawnAt r = withLive fixture (`page` r)
@@ -213,6 +222,36 @@ pages =
       box <- withLive dir (`page` BoxAt "current" HideDead Nothing)
       let boxed = LazyText.toStrict (renderText (document (BoxAt "current" HideDead Nothing) box))
       assertBool (Text.unpack boxed) ("data-key=\"o:extra/a\" style=\"--grade: #c62828\"" `Text.isInfixOf` boxed)
+  , testCase "the graph page updates in place when the space changes, other pages reload" $ do
+      graph <- htmlAt (GraphAt "current" HideDead)
+      status <- htmlAt (StatusAt "current")
+      ( "onmessage = () => updateGraph();" `Text.isInfixOf` graph
+        , "onmessage = () => location.reload();" `Text.isInfixOf` status
+        )
+        @?= (True, True)
+  , testCase "search finds an id first" $
+      searched "sync/git" >>= \r -> take 1 r.ids @?= [ToOption (listed "sync/git")]
+  , testCase "search finds a description's line, the match split out" $
+      searched "RECONNECT" >>= \r ->
+        r.texts
+          @?= [ Hit
+                  { target = ToQuestion (Id "sync/how")
+                  , place = Description
+                  , snippet = Snippet "Devices edit offline and reconcile when they " "reconnect" "."
+                  }
+              ]
+  , testCase "search finds a ruling's reason at the point" $
+      searched "any editor" >>= \r ->
+        [h.target | h <- r.texts, h.place == Reason] @?= [ToOption (listed "store/files")]
+  , testCase "search lists each target once, in its first group" $
+      searched "conflict" >>= \r -> do
+        let every = r.ids ++ map snd r.titles ++ map (.target) r.texts
+        length every @?= Set.size (Set.fromList every)
+  , testCase "an empty search finds nothing" $
+      searched " " >>= (@?= Results [] [] [])
+  , testCase "the search page marks the match" $ do
+      rendered <- htmlAt (SearchAt "current" "reconnect")
+      assertBool (Text.unpack rendered) ("<mark>reconnect</mark>" `Text.isInfixOf` rendered)
   , testCase "the rulings page lists accepts then defeats, inherited ones with their point" $
       pageAt (RulingsAt "edit-offline") >>= \case
         RulingsPage _ rs ->
@@ -368,6 +407,10 @@ server =
     ++ [ testCase "an unknown question answers 404" $
            statusFor (Just "localhost:8080") ["p", "current", "q", "sync", "nope"] >>= (@?= status404)
        , testCase "an unknown point answers 404" $ statusFor (Just "localhost:8080") ["p", "typo"] >>= (@?= status404)
+       , testCase "the graph's elements answer 200" $
+           statusFor (Just "localhost:8080") ["p", "current", "graph", "elements"] >>= (@?= status200)
+       , testCase "the graph's elements at an unknown point answer 404" $
+           statusFor (Just "localhost:8080") ["p", "typo", "graph", "elements"] >>= (@?= status404)
        ]
 
 statusFor :: Maybe Text.Text -> [Text.Text] -> IO Status

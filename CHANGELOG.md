@@ -11,6 +11,7 @@
 ### New Features
 
 - Added a `desc` and a `color` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name`, `desc` and `color`. `serve` shows a grade's `desc` on hover over its name, tints the name with its `color`, and stripes each box cell of an option assessed at it. A bare name still works.
+- Added search to `serve`, linked from every page, and to `browse` under `/`: questions and options whose ids or titles match the text as go-to does, then those whose descriptions, bodies or ruling reasons hold it, each with the line that matched.
 - Added a rulings page to `serve`, linked from every page: the point's accepted and defeated options, inherited ones included, each with its title, reason and the point it comes from, and a button to try reopening it.
 - Added `init`, which creates a space: its directory, `questions/`, `notes/`, `points/`, a `quandary.yaml` showing grades in a comment, and `.quandary/.gitignore`. It creates only what is missing and overwrites nothing.
 - `graph --format dot` prints the space as a Graphviz digraph, each question a cluster holding its options. `graph` alone still prints Mermaid.
@@ -28,6 +29,7 @@
 
 ### Bug Fixes
 
+- Fixed the graph page losing its zoom and expanded questions whenever the space changed. It now redraws in place, keeping both.
 - Fixed an empty or comment-only `quandary.yaml` being reported as `expected a mapping`. It now configures nothing.
 - Fixed ruling commands reading an id with capital letters, such as `Naming/N3`, as the start of the reason when it followed valid ids. It is now reported as an unknown id.
 - Fixed `status` listing an open question under both "taken, more possible" and "raised if taken" when one of its options was taken but none of its raisers was. It is now listed under "taken, more possible" only.

@@ -5,6 +5,7 @@ module Quandary.Shell.Serve
 where
 
 import Control.Monad (join)
+import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString.Builder (byteString)
 import Data.ByteString.Char8 qualified as Char8
@@ -21,7 +22,7 @@ import Quandary.Core.Types
 import Quandary.Core.View (Dead (..))
 import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
-import Quandary.Shell.Render.Html (document, link, titledDocument)
+import Quandary.Shell.Render.Html (document, graphElements, link, titledDocument)
 import Quandary.Shell.Resolve (Verb, verbNamed)
 import Text.Read (readMaybe)
 
@@ -35,6 +36,8 @@ app live point port req respond
   | requestMethod req /= methodGet = respond (plain status405 "only GET, and POST to record\n")
   | pathInfo req == ["events"] = respond (events live (since (queryString req)))
   | ["assets", name] <- pathInfo req = respond (maybe (plain status404 "not found\n") served (Assets.asset name))
+  | ["p", p, "graph", "elements"] <- pathInfo req =
+      page live (GraphAt p (dead (queryString req))) >>= respond . elementsOf
   | ["p", p, "go"] <- pathInfo req
   , Just t <- join (lookup "id" (queryString req)) >>= decoded =
       goToRoute live p t >>= respond . either (responseOf (titledDocument p ("go to " <> t <> " at " <> p))) redirect
@@ -84,6 +87,14 @@ redirect r = responseLBS status303 [(hContentType, "text/html; charset=utf-8"), 
 served :: (ByteString, ByteString) -> Response
 served (mediaType, content) =
   responseLBS status200 [(hContentType, mediaType), (hCacheControl, "no-cache")] (Lazy.fromStrict content)
+
+-- | Returns the graph's elements as JSON; not found for an unknown point,
+-- and a conflict when the space has problems.
+elementsOf :: Drawn -> Response
+elementsOf d = case d.shown of
+  Shown _ (GraphPage p _ g) -> responseLBS status200 [(hContentType, "application/json")] (Aeson.encode (graphElements p g))
+  Shown _ _ -> plain status404 "not found\n"
+  Problems _ -> plain status409 "the space has problems\n"
 
 plain :: Status -> ByteString -> Response
 plain s t = responseLBS s [(hContentType, "text/plain; charset=utf-8")] (Lazy.fromStrict t)
@@ -137,6 +148,7 @@ route _ ["p", p] _ = Just (StatusAt p)
 route _ ("p" : p : "q" : i@(_ : _)) _ = Just (QuestionAt p (Id (Text.intercalate "/" i)))
 route _ ("p" : p : "o" : i@(_ : _)) _ = Just (OptionAt p (Text.intercalate "/" i))
 route _ ["p", p, "rulings"] _ = Just (RulingsAt p)
+route _ ["p", p, "search"] q = SearchAt p <$> maybe (Just "") decoded (join (lookup "q" q))
 route _ ["p", p, "whatif"] q = WhatifAt p <$> traverse supposition q
 route _ ["p", p, "graph"] q = Just (GraphAt p (dead q))
 route _ ["p", p, "record"] q = RecordAt p <$> traverse supposition q

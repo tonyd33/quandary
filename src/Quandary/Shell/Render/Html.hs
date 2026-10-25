@@ -2,6 +2,7 @@ module Quandary.Shell.Render.Html
   ( document
   , titledDocument
   , link
+  , graphElements
   , markdown
   )
 where
@@ -35,6 +36,7 @@ import Quandary.Shell.Render.Cytoscape qualified as Cytoscape
 import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Resolve (Verb (..), verbName)
+import Quandary.Shell.Search qualified as Search
 import Quandary.Shell.Storage.Files (FileProblem)
 
 -- | Returns the route's URL path and query.
@@ -44,6 +46,7 @@ link (QuestionAt p (Id q)) = path (["p", p, "q"] ++ Text.splitOn "/" q)
 link (OptionAt p o) = path (["p", p, "o"] ++ Text.splitOn "/" o)
 link Points = path ["points"]
 link (RulingsAt p) = path ["p", p, "rulings"]
+link (SearchAt p t) = path ["p", p, "search"] <> query [("q", t) | not (Text.null t)]
 link (WhatifAt p ws) = path ["p", p, "whatif"] <> query [(verbName v, t) | (v, t) <- ws]
 link (GraphAt p dead) = path ["p", p, "graph"] <> deadQuery dead
 link (BoxAt p dead play) = path ["p", p, "box"] <> boxQuery dead play
@@ -96,13 +99,23 @@ titledDocument point title d = doctypehtml_ $ do
       " "
       a_ [href_ (link (RulingsAt point))] "rulings"
       " "
+      a_ [href_ (link (SearchAt point ""))] "search"
+      " "
       a_ [href_ (link Points)] "points"
       " "
       form_ [method_ "get", action_ (path ["p", point, "go"])] $
         input_ [type_ "search", name_ "id", placeholder_ "go to id"]
     main_ (pageHtml d)
     unless (answersPost d) $
-      script_ ("new EventSource(\"/events?since=" <> revisionText d.revision <> "\").onmessage = () => location.reload();")
+      script_
+        ("new EventSource(\"/events?since=" <> revisionText d.revision <> "\").onmessage = () => " <> changeScript d <> ";")
+
+-- | Returns the script run when the space changes: the graph updates in
+-- place, every other page reloads.
+changeScript :: Drawn -> Text
+changeScript d = case d.shown of
+  Shown _ GraphPage {} -> "updateGraph()"
+  _ -> "location.reload()"
 
 -- | Holds for the page answering a posted form.
 answersPost :: Drawn -> Bool
@@ -122,6 +135,7 @@ pageHtml d = case d.shown of
     OptionPage v -> optionHtml m v
     PointsPage ps -> pointsHtml ps
     RulingsPage p rs -> rulingsHtml p rs
+    SearchPage p t r -> searchHtml p t r
     WhatifPage p ss r -> whatifHtml p ss r
     GraphPage p dead g -> graphHtml p dead g
     BoxPage box -> boxHtml box
@@ -367,6 +381,32 @@ verbButtons p verbs o = form_ [method_ "get", action_ (link (WhatifAt p []))] $
   forM_ verbs $
     \verb -> button_ [name_ (verbName verb), value_ (optionName o)] (toHtml (verbName verb))
 
+searchHtml :: Text -> Text -> Search.Results -> Html ()
+searchHtml p t r = do
+  h1_ (toHtml ("search at " <> p))
+  form_ [method_ "get", action_ (path ["p", p, "search"])] $
+    input_ [type_ "search", name_ "q", value_ t, placeholder_ "ids, titles, descriptions, reasons", autofocus_]
+  unless (Text.null (Text.strip t)) $ do
+    hitGroup "ids" (map (targetLink p) r.ids)
+    hitGroup "titles" [targetLink p x >> " " >> span_ [class_ "detail"] (toHtml title) | (title, x) <- r.titles]
+    hitGroup "text" [targetLink p h.target >> " " >> hitHtml h | h <- r.texts]
+
+hitGroup :: Text -> [Html ()] -> Html ()
+hitGroup heading [] = h2_ (toHtml heading) >> p_ [class_ "detail"] "none"
+hitGroup heading items = h2_ (toHtml heading) >> ul_ [class_ "hits"] (mapM_ li_ items)
+
+targetLink :: Text -> Search.Target -> Html ()
+targetLink p (Search.ToQuestion q) = questionLink p q
+targetLink p (Search.ToOption o) = optionLink p o
+
+-- | Returns where the text matched and its line, the match marked.
+hitHtml :: Search.Hit -> Html ()
+hitHtml h = span_ [class_ "detail"] $ do
+  span_ [class_ "lead"] (toHtml (Render.placeName h.place))
+  toHtml h.snippet.before
+  mark_ (toHtml h.snippet.matched)
+  toHtml h.snippet.after
+
 whatifHtml :: Text -> [Supposition] -> Either EditError Whatif -> Html ()
 whatifHtml p ss r = do
   h1_ (toHtml ("whatif at " <> p))
@@ -394,8 +434,12 @@ graphHtml p dead g = do
   div_ [id_ "graph"] ""
   script_
     [type_ "application/json", id_ "elements"]
-    (jsonText (Cytoscape.elements (link . QuestionAt p) (link . OptionAt p . optionName) g))
+    (jsonText (graphElements p g))
   scripts ["cytoscape.min.js", "cytoscape-dagre.min.js", "cytoscape-expand-collapse.js", "graph-style.js", "graph.js"]
+
+-- | Returns the graph's elements, each node linked to its page at the point.
+graphElements :: Text -> Graph.Graph -> [Aeson.Value]
+graphElements p = Cytoscape.elements (link . QuestionAt p) (link . OptionAt p . optionName)
 
 scripts :: [Text] -> Html ()
 scripts = mapM_ (\a -> script_ [src_ (Assets.assetPath a)] ("" :: Text))

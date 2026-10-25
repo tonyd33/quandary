@@ -18,6 +18,7 @@ import Quandary.Core.Validate (Model (..))
 import Quandary.Core.View (OptionView (..), QuestionView (..))
 import Quandary.Shell.Browse
   ( Drawn (..)
+  , Finder (..)
   , Focus (..)
   , Live
   , Overlay (..)
@@ -95,7 +96,8 @@ key p Vty.KEnter = enter p
 key _ (Vty.KChar ' ') = selected >>= mapM_ toggle
 key _ Vty.KBS = goBack
 key _ (Vty.KChar 'p') = openPointPicker
-key _ (Vty.KChar 'g') = openGoToPicker ""
+key _ (Vty.KChar 'g') = openFinder ById ""
+key _ (Vty.KChar '/') = openFinder ByText ""
 key _ (Vty.KChar 'w') = whatifOption >>= mapM_ (setOverlay . WhatifPicker)
 key _ (Vty.KChar 'z') = modify (\t -> t {folded = not t.folded})
 key _ (Vty.KChar 'u') = openAbove
@@ -111,14 +113,14 @@ overlayKey (PointPicker i) Vty.KEnter = do
   names <- gets (Browse.pointNames . (.drawn))
   closeOverlay
   forM_ (names !? i) (open . StatusAt)
-overlayKey (GoToPicker t i) Vty.KDown = moveGoTo t i 1
-overlayKey (GoToPicker t i) Vty.KUp = moveGoTo t i (-1)
-overlayKey (GoToPicker t _) Vty.KBS = openGoToPicker (Text.dropEnd 1 t)
-overlayKey (GoToPicker t i) Vty.KEnter = do
-  matches <- gets (Browse.goToMatches t . (.drawn))
+overlayKey (FindPicker f t i) Vty.KDown = moveFinder f t i 1
+overlayKey (FindPicker f t i) Vty.KUp = moveFinder f t i (-1)
+overlayKey (FindPicker f t _) Vty.KBS = openFinder f (Text.dropEnd 1 t)
+overlayKey (FindPicker f t i) Vty.KEnter = do
+  matches <- foundBy f t
   closeOverlay
   forM_ (matches !? Browse.clampIndex matches i) (\(_, target) -> openAt (`Browse.targetRoute` target))
-overlayKey (GoToPicker t _) (Vty.KChar c) = openGoToPicker (Text.snoc t c)
+overlayKey (FindPicker f t _) (Vty.KChar c) = openFinder f (Text.snoc t c)
 overlayKey (WhatifPicker o) (Vty.KChar 'a') = suppose AcceptVerb o
 overlayKey (WhatifPicker o) (Vty.KChar 'd') = suppose DefeatVerb o
 overlayKey (WhatifPicker o) (Vty.KChar 'r') = do
@@ -138,14 +140,17 @@ openPointPicker = do
   t <- get
   setOverlay (PointPicker (fromMaybe 0 (elemIndex (Browse.routePoint t.route) (Browse.pointNames t.drawn))))
 
--- | Open the go-to picker on the text typed, its best match selected.
-openGoToPicker :: Text -> EventM Name Tui ()
-openGoToPicker t = setOverlay (GoToPicker t 0)
+-- | Open the picker finding the text typed, its best match selected.
+openFinder :: Finder -> Text -> EventM Name Tui ()
+openFinder f t = setOverlay (FindPicker f t 0)
 
-moveGoTo :: Text -> Int -> Int -> EventM Name Tui ()
-moveGoTo t i d = do
-  matches <- gets (Browse.goToMatches t . (.drawn))
-  setOverlay (GoToPicker t (Browse.clampIndex matches (i + d)))
+moveFinder :: Finder -> Text -> Int -> Int -> EventM Name Tui ()
+moveFinder f t i d = do
+  matches <- foundBy f t
+  setOverlay (FindPicker f t (Browse.clampIndex matches (i + d)))
+
+foundBy :: Finder -> Text -> EventM Name Tui [(Text, Browse.Target)]
+foundBy f t = gets (Browse.found f t)
 
 movePointPicker :: Int -> Int -> EventM Name Tui ()
 movePointPicker i d = do

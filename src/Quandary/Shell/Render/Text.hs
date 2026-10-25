@@ -28,6 +28,8 @@ module Quandary.Shell.Render.Text
   , editError
   , rulingLine
   , rulingNote
+  , searchLines
+  , placeName
   , rulings
   , links
   , diff
@@ -81,6 +83,7 @@ import Quandary.Core.Source
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 import Quandary.Core.View
+import Quandary.Shell.Search (Hit (..), Place (..), Results (..), Snippet (..), Target (..))
 import Quandary.Shell.Storage.Files
 import Quandary.Shell.Storage.Yaml (YamlIssue (..))
 
@@ -795,6 +798,25 @@ rulings m name =
     from o = case [p.name | p <- chain, Map.member o p.prefer] of
       p : _ -> p
       [] -> name
+
+-- | Returns each target the search found, in order, with its id and what
+-- matched.
+searchLines :: Results -> [(Text, Target)]
+searchLines r =
+  [(targetName x, x) | x <- r.ids]
+    ++ [(targetName x <> "  " <> title, x) | (title, x) <- r.titles]
+    ++ [(targetName h.target <> "  " <> placeName h.place <> ": " <> snippetText h.snippet, h.target) | h <- r.texts]
+
+targetName :: Target -> Text
+targetName (ToQuestion q) = idText q
+targetName (ToOption o) = optionName o
+
+placeName :: Place -> Text
+placeName Description = "description"
+placeName Reason = "reason"
+
+snippetText :: Snippet -> Text
+snippetText s = Text.strip (s.before <> s.matched <> s.after)
 
 -- | Returns each link label in the space with how many links use it, most
 -- used first.
