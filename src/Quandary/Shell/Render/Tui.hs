@@ -42,10 +42,11 @@ import Quandary.Shell.Render.Text qualified as Render
 data Name = QuestionList | OptionList | BodyView | PointList | WhatifView | FindList
   deriving (Eq, Ord, Show)
 
-selectedAttr, dimAttr, focusedAttr :: AttrName
+selectedAttr, dimAttr, focusedAttr, bannerAttr :: AttrName
 selectedAttr = attrName "selected"
 dimAttr = attrName "dim"
 focusedAttr = attrName "focused"
+bannerAttr = attrName "banner"
 
 attributes :: AttrMap
 attributes =
@@ -54,13 +55,15 @@ attributes =
     [ (selectedAttr, Vty.defAttr `Vty.withStyle` Vty.reverseVideo)
     , (dimAttr, Vty.defAttr `Vty.withStyle` Vty.dim)
     , (focusedAttr, Vty.defAttr `Vty.withStyle` Vty.bold)
+    , (bannerAttr, Vty.defAttr `Vty.withForeColor` Vty.yellow `Vty.withStyle` Vty.bold)
     , (headingAttr, Vty.defAttr `Vty.withStyle` Vty.bold)
     , (codeAttr, Vty.defAttr `Vty.withForeColor` Vty.cyan)
     ]
 
 draw :: Tui -> [Widget Name]
-draw t = maybe [] (\o -> [overlayWidget t o]) t.overlay ++ [vBox [header t, content, footer]]
+draw t = maybe [] (\o -> [overlayWidget t o]) t.overlay ++ [vBox (header t : banner ++ [content, footer])]
   where
+    banner = maybe [] (\n -> [withAttr bannerAttr (txtWrap (" " <> n))]) (Render.lockNotice t.drawn.editLock)
     content = case Browse.pageStanding t.drawn of
       Just (m, s) -> hBox [questionList t m s, pageWidget t.focus t.bodies t.drawn]
       Nothing -> pageWidget t.focus t.bodies t.drawn

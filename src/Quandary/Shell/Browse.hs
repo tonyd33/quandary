@@ -55,6 +55,8 @@ import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Time (UTCTime)
 import Data.Void (Void, absurd)
 import Quandary.Core.Analyse
 import Quandary.Core.Analyse qualified as Analyse
@@ -75,7 +77,7 @@ import Quandary.Shell.Rule qualified as Rule
 import Quandary.Shell.Search (Results, Target (..))
 import Quandary.Shell.Search qualified as Search
 import Quandary.Shell.Solver.Cadical (cadical)
-import Quandary.Shell.Storage.Files (FileProblem (..))
+import Quandary.Shell.Storage.Files (EditLock, FileProblem (..), LockState (..), Override (..))
 import Quandary.Shell.Storage.Files qualified as Files
 import System.Directory (doesDirectoryExist, makeAbsolute)
 import System.FSNotify (Event (..), EventIsDirectory (..), WatchManager, watchDir, watchTree, withManager)
@@ -166,6 +168,8 @@ data NotRecorded
   | UnknownId Text
   | -- | A defeat of the id has no reason.
     NoReason Text
+  | -- | The space is locked for an edit, and the form did not override it.
+    EditLocked EditLock
   | RulingRefused Model Refusal
 
 newtype Revision = Revision Int
@@ -175,6 +179,8 @@ data Usability = Unusable [FileProblem] | Usable Model
 
 data Drawn = Drawn
   { revision :: Revision
+  , editLock :: LockState
+  -- ^ The space's edit lock as the page was drawn.
   , shown :: Shown
   }
 
@@ -205,36 +211,53 @@ withLive dir k = do
   events <- newTVarIO 0
   withManager $ \manager -> do
     watchSpace manager root (atomically (modifyTVar' events (+ 1)))
-    first <- Files.readSpace dir
-    live <- Live dir <$> newTVarIO (Revision 0, usability dir first) <*> newTVarIO (Revision 0, emptyMemo)
+    first <- snapshot dir
+    live <- Live dir <$> newTVarIO (Revision 0, usability dir first.loaded) <*> newTVarIO (Revision 0, emptyMemo)
     either absurd id <$> race (settle live events 0 first) (k live)
 
--- | Run the action on every event touching `quandary.yaml` or the
--- directories of Markdown files.
+-- | Run the action on every event touching `quandary.yaml`, the
+-- directories of Markdown files or the edit lock.
 watchSpace :: WatchManager -> FilePath -> IO () -> IO ()
 watchSpace manager root changed = do
   _ <- watchDir manager root atRoot onRootEvent
   forM_ Files.directories $ \d -> do
     exists <- doesDirectoryExist (root </> d)
     when exists (watchUnder d)
+  stateExists <- doesDirectoryExist stateDir
+  when stateExists watchLock
   where
-    atRoot e = takeFileName e.eventPath `elem` Files.pathOf "" ConfigDoc : Files.directories
+    lockPath = Files.editLockPath root
+    stateDir = Files.stateDir root
+    atRoot e = takeFileName e.eventPath `elem` Files.pathOf "" ConfigDoc : takeFileName stateDir : Files.directories
     watchUnder d = void (watchTree manager (root </> d) (const True) (const changed))
+    watchLock = void (watchDir manager stateDir ((== lockPath) . (.eventPath)) (const changed))
     onRootEvent e = do
       case e of
-        Added {eventIsDirectory = IsDirectory} -> watchUnder (takeFileName e.eventPath)
+        Added {eventIsDirectory = IsDirectory}
+          | e.eventPath == stateDir -> watchLock
+          | otherwise -> watchUnder (takeFileName e.eventPath)
         _ -> pure ()
       changed
 
+-- | The space as read, and when its edit lock file was last written.
+data Snapshot = Snapshot
+  { loaded :: Files.Loaded
+  , lockWritten :: Maybe UTCTime
+  }
+  deriving (Eq)
+
+snapshot :: FilePath -> IO Snapshot
+snapshot dir = Snapshot <$> Files.readSpace dir <*> Files.lockTaken dir
+
 -- | Wait for an event past the count seen, then for 100ms without one,
--- then reread the space, publishing it when it differs from the one read
--- before.
-settle :: Live -> TVar Int -> Int -> Files.Loaded -> IO Void
+-- then reread the space, publishing it when it or its edit lock differs
+-- from what was read before.
+settle :: Live -> TVar Int -> Int -> Snapshot -> IO Void
 settle live events seen previous = do
   n <- atomically (eventPast events seen) >>= quiet
-  reread <- try @IOException (Files.readSpace live.dir)
-  next <- case reread of
-    Right l | l /= previous -> l <$ publish (usability live.dir l)
+  latest <- try @IOException (snapshot live.dir)
+  next <- case latest of
+    Right s | s /= previous -> s <$ publish (usability live.dir s.loaded)
     _ -> pure previous
   settle live events n next
   where
@@ -267,7 +290,8 @@ currentRevision live = fst <$> readTVarIO live.loaded
 page :: Live -> Route -> IO Drawn
 page live r = do
   (rev, u) <- readTVarIO live.loaded
-  Drawn rev <$> case u of
+  lock <- Files.editLock live.dir
+  Drawn rev lock <$> case u of
     Unusable ps -> pure (Problems ps)
     Usable m -> Shown m <$> memoised live rev (Map.lookup r . (.pages)) store (build (Building live rev m) r)
   where
@@ -513,20 +537,25 @@ pageOptions expanded d = case d.shown of
 
 -- | Record the suppositions as rulings at the point, each with its reason,
 -- holding the ruling lock. Refuse, writing nothing, when the space changed
--- since the revision a page was drawn at, when a defeat has no reason, or
+-- since the revision a page was drawn at, when the space is locked for an
+-- edit and the form does not override it, when a defeat has no reason, or
 -- when they would leave the point stale.
-record :: Live -> Text -> Revision -> [(Verb, Text, Text)] -> IO Drawn
-record live p drawnAt rs = Files.withRulingLock live.dir $ do
+record :: Live -> Text -> Revision -> Override -> [(Verb, Text, Text)] -> IO Drawn
+record live p drawnAt override rs = Files.withRulingLock live.dir $ do
   (now, u) <- readTVarIO live.loaded
   disk <- usability live.dir <$> Files.readSpace live.dir
-  Drawn now <$> case u of
+  lock <- Files.editLock live.dir
+  Drawn now lock <$> case u of
     Unusable ps -> pure (Problems ps)
     Usable m
       | not (hasPoint m p) -> pure (Shown m (NotFound ("unknown point " <> p)))
       | now /= drawnAt || not (sameModel m disk) -> pure (recorded m (Left SpaceChanged))
+      | Locked l <- lock, override == KeepLock -> pure (recorded m (Left (EditLocked l)))
       | otherwise -> case traverse (recordedEdit m.space) rs of
           Left e -> pure (recorded m (Left e))
-          Right es -> recorded m . Bifunctor.first (uncurry RulingRefused) <$> Rule.ruled live.dir m p es
+          Right es ->
+            recorded m . Bifunctor.first (uncurry RulingRefused)
+              <$> Rule.ruled live.dir (Files.overriding lock override) m p es
   where
     recorded m = Shown m . RecordedPage p [(v, t) | (v, t, _) <- rs]
 
@@ -559,12 +588,13 @@ matching ByText m p t = Render.searchLines (Search.search m p t)
 goToRoute :: Live -> Text -> Text -> IO (Either Drawn Route)
 goToRoute live p t = do
   (rev, u) <- readTVarIO live.loaded
+  lock <- Files.editLock live.dir
   pure $ case u of
-    Unusable ps -> Left (Drawn rev (Problems ps))
+    Unusable ps -> Left (Drawn rev lock (Problems ps))
     Usable m
-      | not (hasPoint m p) -> Left (Drawn rev (Shown m (NotFound ("unknown point " <> p))))
+      | not (hasPoint m p) -> Left (Drawn rev lock (Shown m (NotFound ("unknown point " <> p))))
       | (_, target) : _ <- matching ById m p t -> Right (targetRoute p target)
-      | otherwise -> Left (Drawn rev (Shown m (NotFound ("no id matches " <> t))))
+      | otherwise -> Left (Drawn rev lock (Shown m (NotFound ("no id matches " <> t))))
 
 -- | Returns the index clamped to the list's indices, 0 when it is empty.
 clampIndex :: [a] -> Int -> Int

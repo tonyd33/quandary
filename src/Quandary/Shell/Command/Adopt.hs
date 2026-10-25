@@ -29,6 +29,7 @@ record :: Env -> Text -> Adoption -> IO ExitCode
 record env name a = do
   traverse_ (Files.writePoint env.dir) (changedPoints env.model a.model)
   Files.removePoint env.dir name
+  Files.recordOverride env.dir env.override [adoptedLine name a]
   Text.putStr (adoptedText name a)
   pure ExitSuccess
 
@@ -40,10 +41,13 @@ changedPoints before after = filter changed (Map.elems after.points)
 adoptedText :: Text -> Adoption -> Text
 adoptedText name a =
   Text.unlines $
-    ["adopted " <> name <> " into " <> a.into]
+    [adoptedLine name a]
       ++ map ("  " <>) (Render.movedLines a.model a.into a.moved)
       ++ map droppedLine a.dropped
       ++ ["removed point " <> name]
+
+adoptedLine :: Text -> Adoption -> Text
+adoptedLine name a = "adopted " <> name <> " into " <> a.into
 
 droppedLine :: (Text, [OptionId]) -> Text
 droppedLine (p, os) = "  point " <> p <> " drops " <> Text.intercalate ", " (map optionName os)

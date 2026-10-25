@@ -16,6 +16,7 @@ create env name parent proposed = case newPoint env.model.points name parent pro
   Left e -> failWith (Render.pointError e)
   Right p -> do
     Files.writePoint env.dir p
+    Files.recordOverride env.dir env.override [createdLine p]
     Text.putStrLn (createdLine p)
     pure ExitSuccess
 
@@ -24,8 +25,12 @@ remove env name = case withoutPoint env.model.points name of
   Left e -> failWith (Render.pointError e)
   Right _ -> do
     Files.removePoint env.dir name
-    Text.putStrLn ("removed point " <> name)
+    Files.recordOverride env.dir env.override [removedLine name]
+    Text.putStrLn (removedLine name)
     pure ExitSuccess
+
+removedLine :: Text -> Text
+removedLine name = "removed point " <> name
 
 createdLine :: Point -> Text
 createdLine p = "created " <> marker <> "point " <> p.name <> maybe "" (" extending " <>) p.extends

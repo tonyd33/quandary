@@ -1,12 +1,14 @@
 module Cli (cli) where
 
 import Control.Concurrent.Async (forConcurrently)
-import Data.List (isInfixOf, isPrefixOf, sort)
+import Control.Monad (forM_)
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, sort)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
-import Fixtures (withCopy)
-import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
+import Data.Time (addUTCTime, getCurrentTime)
+import Fixtures (ageSpace, withCopy)
+import System.Directory (createDirectoryIfMissing, listDirectory, removeFile, setModificationTime)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (readFile')
@@ -562,6 +564,110 @@ cli =
         _ <- quandary dir ["defeat", "conflict/copy", "--", "not now"]
         files <- listDirectory (dir </> "points")
         sort files @?= ["current.md", "edit-offline.md"]
+    , testCase "while the space is locked for an edit, every command writing points refuses" $ withCopy $ \dir -> do
+        _ <- quandary dir ["point", "new", "branch"]
+        (code, out, _) <- quandary dir ["lock", "agent", "adding", "options"]
+        (code, out) @?= (ExitSuccess, "locked for an edit: agent adding options\n")
+        before <- readFile' (dir </> "points/current.md")
+        let writing =
+              [ ["accept", "sync/git"]
+              , ["defeat", "conflict/copy", "--", "not now"]
+              , ["exhaust", "sync/how", "--", "that is all"]
+              , ["settle", "sync/how", "--", "done"]
+              , ["reopen", "sync/git"]
+              , ["defer", "sync/how"]
+              , ["prefer", "sync/git", "3"]
+              , ["point", "new", "other"]
+              , ["point", "rm", "branch"]
+              , ["adopt", "branch"]
+              ]
+        results <- mapM (quandary dir) writing
+        [code' | (code', _, _) <- results] @?= map (const (ExitFailure 1)) writing
+        forM_ results $ \(_, _, err) -> assertBool err (refusedForLock err)
+        unchanged <- readFile' (dir </> "points/current.md")
+        unchanged @?= before
+    , testCase "--force writes while the space is locked for an edit" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        (code, out, _) <- quandary dir ["accept", "sync/git", "--force"]
+        (code, lines out) @?= (ExitSuccess, ["accepted sync/git", "  sync/how: open -> closed"])
+    , testCase "read-only commands warn while the space is locked for an edit" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        (code, _, err) <- quandary dir ["status"]
+        code @?= ExitSuccess
+        assertBool err ("quandary: warning: the space is locked for an edit since " `isPrefixOf` err)
+        assertBool err ("agent adding options\n" `isSuffixOf` err)
+    , testCase "a second lock refuses while the first is live" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "first"]
+        (code, _, err) <- quandary dir ["lock", "second"]
+        code @?= ExitFailure 1
+        assertBool err ("quandary: the space is already locked for an edit since " `isPrefixOf` err)
+        assertBool err ("ago): first\n" `isSuffixOf` err)
+    , testCase "unlock checks the space, then releases the lock" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        writeFile (dir </> "questions/bad.md") "no frontmatter\n"
+        (code, out, _) <- quandary dir ["unlock"]
+        code @?= ExitFailure 1
+        last (lines out) @?= "unlocked: agent adding options"
+        removeFile (dir </> "questions/bad.md")
+        r <- quandary dir ["defeat", "conflict/copy", "--", "not now"]
+        r @?= (ExitSuccess, "defeated conflict/copy\n", "")
+    , testCase "unlock with no lock says so" $ withCopy $ \dir -> do
+        r <- quandary dir ["unlock"]
+        r @?= (ExitSuccess, "ok\nnot locked\n", "")
+    , testCase "the lock lapses 15 minutes after the later of its taking and the last edit" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        ageSpace dir 16
+        (code, out, err) <- quandary dir ["defeat", "conflict/copy", "--", "not now"]
+        (code, out) @?= (ExitSuccess, "defeated conflict/copy\n")
+        assertBool err ("quandary: warning: the edit lock lapsed at " `isPrefixOf` err)
+        assertBool err (" without unlock: agent adding options; the edit may be unfinished\n" `isSuffixOf` err)
+        (code', _, _) <- quandary dir ["lock", "again"]
+        code' @?= ExitSuccess
+    , testCase "a lapsed lock warns until unlock" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        ageSpace dir 16
+        (_, _, warned) <- quandary dir ["status"]
+        assertBool warned ("lapsed at " `isInfixOf` warned)
+        (code, out, _) <- quandary dir ["unlock"]
+        code @?= ExitSuccess
+        assertBool out ("ok\nunlocked: agent adding options (lapsed at " `isPrefixOf` out)
+        (_, _, err) <- quandary dir ["status"]
+        err @?= ""
+    , testCase "unlock lists the rulings forced over the lock" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        _ <- quandary dir ["accept", "sync/git", "--force"]
+        _ <- quandary dir ["--point", "edit-offline", "defeat", "conflict/copy", "--force", "--", "not", "now"]
+        r <- quandary dir ["unlock"]
+        r
+          @?= ( ExitSuccess
+              , unlines
+                  [ "ok"
+                  , "unlocked: agent adding options"
+                  , "ruled while locked: accepted sync/git at current"
+                  , "ruled while locked: defeated conflict/copy at edit-offline"
+                  ]
+              , ""
+              )
+    , testCase "--force with no lock and a refused --force list nothing" $ withCopy $ \dir -> do
+        _ <- quandary dir ["accept", "sync/git", "--force"]
+        _ <- quandary dir ["lock", "agent adding options"]
+        _ <- quandary dir ["accept", "sync/crdt", "--force"]
+        r <- quandary dir ["unlock"]
+        r @?= (ExitSuccess, "ok\nunlocked: agent adding options\n", "")
+    , testCase "a new lock forgets the lapsed one's forced rulings" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "first"]
+        _ <- quandary dir ["accept", "sync/git", "--force"]
+        ageSpace dir 16
+        _ <- quandary dir ["lock", "second"]
+        r <- quandary dir ["unlock"]
+        r @?= (ExitSuccess, "ok\nunlocked: second\n", "")
+    , testCase "an edit keeps the lock live" $ withCopy $ \dir -> do
+        _ <- quandary dir ["lock", "agent adding options"]
+        ageSpace dir 16
+        now <- getCurrentTime
+        setModificationTime (dir </> "questions/sync/how.md") (addUTCTime (-5 * 60) now)
+        (code, _, _) <- quandary dir ["defeat", "conflict/copy", "--", "not now"]
+        code @?= ExitFailure 1
     , testCase "a usage error" $ withCopy $ \dir -> do
         (code, _, err) <- quandary dir ["frobnicate"]
         code @?= ExitFailure 1
@@ -570,6 +676,11 @@ cli =
         (code, out, _) <- readProcessWithExitCode "quandary" ["--version"] ""
         (code, out) @?= (ExitSuccess, "0.1.0\n")
     ]
+
+refusedForLock :: String -> Bool
+refusedForLock err =
+  "quandary: the space is locked for an edit since " `isPrefixOf` err
+    && "ago): agent adding options; nothing done (--force writes anyway)\n" `isSuffixOf` err
 
 quandary :: FilePath -> [String] -> IO (ExitCode, String, String)
 quandary dir args = readProcessWithExitCode "quandary" (["-C", dir] ++ args) ""

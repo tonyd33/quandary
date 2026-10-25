@@ -10,6 +10,7 @@
 
 ### New Features
 
+- Added `lock REASON` and `unlock`, marking a space mid-edit. While the lock is live, every command writing points refuses with its reason and age unless given `--force`, read-only commands warn, and `browse` and `serve` show it above every page; `serve`'s record form refuses unless its override is checked. `unlock` runs `check` before releasing, and lists every ruling forced over the lock. The lock lapses 15 minutes after the later of its taking and the last edit to the space's questions, notes or `quandary.yaml`; until someone unlocks, commands and pages warn that the edit may be unfinished.
 - Added a `desc` and a `color` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name`, `desc` and `color`. `serve` shows a grade's `desc` on hover over its name, tints the name with its `color`, and stripes each box cell of an option assessed at it. A bare name still works.
 - Added search to `serve`, linked from every page, and to `browse` under `/`: questions and options whose ids or titles match the text as go-to does, then those whose descriptions, bodies or ruling reasons hold it, each with the line that matched.
 - Added a rulings page to `serve`, linked from every page: the point's accepted and defeated options, inherited ones included, each with its title, reason and the point it comes from, and a button to try reopening it.

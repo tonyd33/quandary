@@ -11,7 +11,7 @@ import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TextIO
 import Data.Text.Lazy qualified as LazyText
 import Data.Text.Lazy.Encoding qualified as LazyText
-import Fixtures (fixture, listed, other, withCopy)
+import Fixtures (ageSpace, fixture, listed, other, withCopy)
 import Lucid (renderText)
 import Network.HTTP.Types
   ( Status (..)
@@ -57,6 +57,7 @@ import Quandary.Shell.Resolve (Verb (..))
 import Quandary.Shell.Search (Hit (..), Place (..), Results (..), Snippet (..))
 import Quandary.Shell.Serve (app, route)
 import Quandary.Shell.Storage.Files (FileProblem (..))
+import Quandary.Shell.Storage.Files qualified as Files
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Timeout (timeout)
@@ -474,6 +475,34 @@ recording =
       before <- TextIO.readFile (dir </> "points/current.md")
       (_, point) <- recordIn dir (Just "http://localhost:8080") "revision=0&accept=sync%2Fcrdt&reason="
       point @?= before
+  , testCase "a record form while the space is locked for an edit writes nothing" $ withCopy $ \dir -> do
+      _ <- Files.lockForEdit dir "agent adding options"
+      before <- TextIO.readFile (dir </> "points/current.md")
+      (_, point) <- recordIn dir (Just "http://localhost:8080") "revision=0&defeat=conflict%2Fcopy&reason=x"
+      point @?= before
+  , testCase "a record form overriding the edit lock writes the rulings" $ withCopy $ \dir -> do
+      _ <- Files.lockForEdit dir "agent adding options"
+      (_, point) <- recordIn dir (Just "http://localhost:8080") "revision=0&force=on&defeat=conflict%2Fcopy&reason=x"
+      assertBool (Text.unpack point) ("conflict/copy:" `Text.isInfixOf` point)
+      (_, forced) <- Files.unlockEdit dir
+      forced @?= ["defeated conflict/copy at current"]
+  , testCase "a lapsed edit lock shows until unlock" $ withCopy $ \dir -> do
+      _ <- Files.lockForEdit dir "agent adding options"
+      ageSpace dir 16
+      status <- withLive dir $ \l -> LazyText.toStrict . renderText . document (StatusAt "current") <$> page l (StatusAt "current")
+      assertBool (Text.unpack status) ("the edit lock lapsed at " `Text.isInfixOf` status)
+  , testCase "while the space is locked for an edit, pages show it and the record form can override it" $
+      withCopy $ \dir -> do
+        _ <- Files.lockForEdit dir "agent adding options"
+        let form = RecordAt "current" [(DefeatVerb, "conflict/copy")]
+        [status, formHtml] <- withLive dir $ \l ->
+          mapM (\r -> LazyText.toStrict . renderText . document r <$> page l r) [StatusAt "current", form]
+        assertBool (Text.unpack status) ("locked for an edit since" `Text.isInfixOf` status)
+        assertBool (Text.unpack status) ("agent adding options" `Text.isInfixOf` status)
+        assertBool (Text.unpack formHtml) ("name=\"force\"" `Text.isInfixOf` formHtml)
+  , testCase "an unlocked space shows no banner and no override" $ do
+      form <- htmlAt (RecordAt "current" [(DefeatVerb, "conflict/copy")])
+      assertBool (Text.unpack form) (not (any (`Text.isInfixOf` form) ["class=\"banner\"", "name=\"force\""]))
   ]
 
 goTo :: [TestTree]

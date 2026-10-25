@@ -10,6 +10,7 @@ nav form { margin-left: auto; }
 nav input { font: inherit; font-size: 0.9rem; width: 16rem; padding: 0.3rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }
 main { max-width: 64rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
 main:has(#graph) { max-width: none; padding-bottom: 1rem; }
+.banner { margin: 0; padding: 0.5rem max(1rem, calc((100vw - 62rem) / 2)); background: var(--possible-bg); color: var(--possible); border-bottom: 1px solid var(--line); font-weight: 500; }
 h1 { font-size: 1.5rem; line-height: 1.3; margin: 0 0 0.5rem; }
 h2 { font-size: 1.05rem; margin: 2rem 0 0.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--line); }
 a { color: var(--accent); text-decoration: none; }

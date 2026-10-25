@@ -16,12 +16,15 @@ import Quandary.Core.Types
 import Quandary.Core.Validate
 import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Solver.Cadical qualified as Cadical
+import Quandary.Shell.Storage.Files qualified as Files
 import System.Exit (ExitCode (..))
 
 data Env = Env
   { dir :: FilePath
   , point :: Text
   , model :: Model
+  , override :: Files.Override
+  -- ^ Whether the command writes over a live edit lock.
   }
 
 analysis :: Env -> IO Analysis

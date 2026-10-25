@@ -5,6 +5,9 @@ module Quandary.Shell.Storage.Files
   , FormatIssue (..)
   , Shape (..)
   , Loaded (..)
+  , EditLock (..)
+  , LockState (..)
+  , Override (..)
   , readSpace
   , isSpace
   , createSpace
@@ -13,6 +16,15 @@ module Quandary.Shell.Storage.Files
   , problemsOf
   , writePoint
   , withRulingLock
+  , editLock
+  , lockTaken
+  , lockForEdit
+  , recordOverride
+  , unlockEdit
+  , isLocked
+  , overriding
+  , editLockPath
+  , stateDir
   , removePoint
   , pathOf
   , locate
@@ -21,7 +33,7 @@ where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (forConcurrently)
-import Control.Exception (evaluate, finally)
+import Control.Exception (IOException, evaluate, finally, throwIO, try)
 import Control.Monad (forM, forM_, unless)
 import Data.ByteString qualified as ByteString
 import Data.Conduit (runConduitRes, (.|))
@@ -33,8 +45,19 @@ import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Encoding (decodeUtf8', encodeUtf8)
+import Data.Text.Encoding (decodeUtf8', decodeUtf8With, encodeUtf8)
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Text.IO qualified as Text
+import Data.Time
+  ( LocalTime
+  , NominalDiffTime
+  , UTCTime
+  , addUTCTime
+  , diffUTCTime
+  , getCurrentTime
+  , getCurrentTimeZone
+  , utcToLocalTime
+  )
 import GHC.IO.Handle.Lock (LockMode (..), hLock, hTryLock)
 import Quandary.Core.Source
 import Quandary.Core.Types
@@ -46,8 +69,10 @@ import System.Directory
   , doesDirectoryExist
   , doesFileExist
   , doesPathExist
+  , getModificationTime
   , listDirectory
   , removeFile
+  , removePathForcibly
   , renameFile
   )
 import System.FilePath
@@ -62,6 +87,7 @@ import System.FilePath
   , (</>)
   )
 import System.IO (IOMode (..), hClose, openBinaryTempFile, stderr, withFile)
+import System.IO.Error (isDoesNotExistError)
 import Text.Libyaml qualified as Y
 
 data FileProblem = FileProblem
@@ -486,6 +512,115 @@ withRulingLock root k = do
       hTryLock h ExclusiveLock >>= \case
         True -> pure True
         False -> threadDelay 50000 >> tryFor (n - 1) h
+
+-- | A space being edited: why, since when, and for how long as of reading.
+data EditLock = EditLock
+  { reason :: Text
+  , since :: LocalTime
+  , age :: NominalDiffTime
+  }
+  deriving (Eq, Show)
+
+-- | The space's edit lock: none, live, or lapsed at the time given without
+-- an unlock.
+data LockState = Unlocked | Locked EditLock | Lapsed EditLock LocalTime
+  deriving (Eq, Show)
+
+-- | Whether a write goes ahead over a live edit lock.
+data Override = KeepLock | OverrideLock
+  deriving (Eq, Show)
+
+isLocked :: LockState -> Bool
+isLocked (Locked _) = True
+isLocked _ = False
+
+-- | Returns the override a write carries: the one asked for while the lock
+-- is live.
+overriding :: LockState -> Override -> Override
+overriding (Locked _) o = o
+overriding _ _ = KeepLock
+
+editLockPath :: FilePath -> FilePath
+editLockPath root = stateDir root </> "edit-lock"
+
+forcedPath :: FilePath -> FilePath
+forcedPath root = stateDir root </> "forced"
+
+-- | Returns the space's edit lock. It lapses 15 minutes after the later of
+-- its taking and the newest change to `quandary.yaml` or a Markdown file
+-- under `questions/` or `notes/`. A lock dated in the future reads as
+-- taken now.
+editLock :: FilePath -> IO LockState
+editLock root =
+  try (ByteString.readFile (editLockPath root)) >>= \case
+    Left e | isDoesNotExistError e -> pure Unlocked
+    Left e -> throwIO e
+    Right bytes -> heldFor root (oneLine (decodeUtf8With lenientDecode bytes))
+
+-- | Returns the lock held for the reason, live or lapsed.
+heldFor :: FilePath -> Text -> IO LockState
+heldFor root reason = do
+  now <- getCurrentTime
+  since <- min now <$> getModificationTime (editLockPath root)
+  lapses <- addUTCTime lease . maximum . (since :) <$> lastEdited root
+  zone <- getCurrentTimeZone
+  let held = EditLock {reason = reason, since = utcToLocalTime zone since, age = diffUTCTime now since}
+  pure (if now < lapses then Locked held else Lapsed held (utcToLocalTime zone lapses))
+
+-- | Returns the text with each run of whitespace a single space.
+oneLine :: Text -> Text
+oneLine = Text.unwords . Text.words
+
+lease :: NominalDiffTime
+lease = 15 * 60
+
+lastEdited :: FilePath -> IO [UTCTime]
+lastEdited root = do
+  config <- doesFileExist (pathOf root ConfigDoc)
+  files <- concat <$> traverse (markdownUnder . (root </>)) [questionsDir, notesDir]
+  traverse getModificationTime ([pathOf root ConfigDoc | config] ++ files)
+
+-- | Returns when the edit lock file was last written, if it exists.
+lockTaken :: FilePath -> IO (Maybe UTCTime)
+lockTaken root = do
+  exists <- doesFileExist (editLockPath root)
+  if exists then Just <$> getModificationTime (editLockPath root) else pure Nothing
+
+-- | Take the space's edit lock for the reason, on one line, holding the
+-- ruling lock and replacing a lapsed lock and its forced rulings. Returns
+-- the reason as stored, or the lock already held, writing nothing, when
+-- one is live.
+lockForEdit :: FilePath -> Text -> IO (Either EditLock Text)
+lockForEdit root reason =
+  withRulingLock root $
+    editLock root >>= \case
+      Locked held -> pure (Left held)
+      _ -> do
+        removePathForcibly (forcedPath root)
+        Right (oneLine reason) <$ replaceFile (editLockPath root) (encodeUtf8 (oneLine reason <> "\n"))
+
+-- | Append the lines to the forced rulings when the write overrides the
+-- edit lock.
+recordOverride :: FilePath -> Override -> [Text] -> IO ()
+recordOverride _ KeepLock _ = pure ()
+recordOverride root OverrideLock done = Text.appendFile (forcedPath root) (Text.unlines done)
+
+-- | Release the space's edit lock, live, lapsed or unreadable, holding the
+-- ruling lock. Returns it with the rulings written over it, or rethrows
+-- the failure reading it.
+unlockEdit :: FilePath -> IO (LockState, [Text])
+unlockEdit root = withRulingLock root $ do
+  held <- try @IOException (editLock root)
+  forced <- linesIfPresent (forcedPath root)
+  removePathForcibly (editLockPath root)
+  removePathForcibly (forcedPath root)
+  state <- either throwIO pure held
+  pure (state, forced)
+
+linesIfPresent :: FilePath -> IO [Text]
+linesIfPresent path = do
+  exists <- doesFileExist path
+  if exists then Text.lines <$> Text.readFile path else pure []
 
 createStateDir :: FilePath -> IO ()
 createStateDir root = do

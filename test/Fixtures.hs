@@ -11,22 +11,25 @@ module Fixtures
   , because
   , rank
   , modelAt
+  , ageSpace
   )
 where
 
+import Control.Monad (forM, forM_)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromJust)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
 import Quandary.Core.Rulings (emptyPoint)
 import Quandary.Core.Types hiding (rank)
 import Quandary.Core.Types qualified as Types
 import Quandary.Core.Validate
 import Quandary.Shell.Storage.Files
-import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
-import System.FilePath ((</>))
+import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, listDirectory, setModificationTime)
+import System.FilePath (makeRelative, takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty.HUnit
 
@@ -98,15 +101,11 @@ withCopy k = withSystemTempDirectory "quandary" $ \dir -> do
 
 copyTree :: FilePath -> FilePath -> IO ()
 copyTree from to = do
-  createDirectoryIfMissing True to
-  entries <- listDirectory from
-  mapM_
-    ( \e -> do
-        let src = from </> e
-        isDir <- doesDirectoryExist src
-        if isDir then copyTree src (to </> e) else copyFile src (to </> e)
-    )
-    entries
+  files <- filesUnder from
+  forM_ files $ \f -> do
+    let target = to </> makeRelative from f
+    createDirectoryIfMissing True (takeDirectory target)
+    copyFile f target
 
 -- | Read and validate the space, failing only when validation blocks it.
 modelOf :: FilePath -> IO Model
@@ -121,3 +120,18 @@ cleanModelOf dir = do
 
 validated :: Loaded -> IO Model
 validated loaded = maybe (assertFailure "blocked") pure (validate loaded.sources).model
+
+-- | Set every file's modification time the minutes back.
+ageSpace :: FilePath -> NominalDiffTime -> IO ()
+ageSpace dir minutes = do
+  now <- getCurrentTime
+  let past = addUTCTime (-60 * minutes) now
+  files <- filesUnder dir
+  mapM_ (`setModificationTime` past) files
+
+filesUnder :: FilePath -> IO [FilePath]
+filesUnder dir = do
+  entries <- map (dir </>) <$> listDirectory dir
+  fmap concat . forM entries $ \e -> do
+    isDir <- doesDirectoryExist e
+    if isDir then filesUnder e else pure [e]

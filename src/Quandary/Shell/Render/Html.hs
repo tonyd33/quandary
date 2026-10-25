@@ -37,7 +37,8 @@ import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Resolve (Verb (..), verbName)
 import Quandary.Shell.Search qualified as Search
-import Quandary.Shell.Storage.Files (FileProblem)
+import Quandary.Shell.Storage.Files (FileProblem, LockState)
+import Quandary.Shell.Storage.Files qualified as Files
 
 -- | Returns the route's URL path and query.
 link :: Route -> Text
@@ -105,6 +106,7 @@ titledDocument point title d = doctypehtml_ $ do
       " "
       form_ [method_ "get", action_ (path ["p", point, "go"])] $
         input_ [type_ "search", name_ "id", placeholder_ "go to id"]
+    forM_ (Render.lockNotice d.editLock) (p_ [class_ "banner"] . toHtml)
     main_ (pageHtml d)
     unless (answersPost d) $
       script_
@@ -139,7 +141,7 @@ pageHtml d = case d.shown of
     WhatifPage p ss r -> whatifHtml p ss r
     GraphPage p dead g -> graphHtml p dead g
     BoxPage box -> boxHtml box
-    RecordPage p ws -> recordHtml d.revision p ws
+    RecordPage p ws -> recordHtml d.revision d.editLock p ws
     RecordedPage p ws r -> recordedHtml p ws r
     NotFound t -> h1_ "not found" >> p_ (toHtml t)
 
@@ -529,15 +531,18 @@ recordHelp :: Text
 recordHelp = "Record these as rulings at the point, each with a reason."
 
 -- | Returns the form recording the suppositions as rulings, with a reason
--- for each and the revision it was drawn at.
-recordHtml :: Revision -> Text -> [(Verb, Text)] -> Html ()
-recordHtml rev p ws = do
+-- for each, the revision it was drawn at and, while the space is locked
+-- for an edit, a box overriding the lock.
+recordHtml :: Revision -> LockState -> Text -> [(Verb, Text)] -> Html ()
+recordHtml rev lock p ws = do
   h1_ (toHtml ("record at " <> p))
   p_
     [class_ "muted"]
     (toHtml ("Each becomes a ruling at " <> p <> ", as accept and defeat record one. A defeat needs a reason."))
   form_ [method_ "post", action_ (path ["p", p, "rule"]), class_ "record"] $ do
     input_ [type_ "hidden", name_ "revision", value_ (revisionText rev)]
+    when (Files.isLocked lock) $
+      label_ (input_ [type_ "checkbox", name_ "force"] >> " record while the space is locked")
     forM_ ws $ \(v, t) -> label_ $ do
       input_ [type_ "hidden", name_ (verbName v), value_ t]
       span_ (toHtml (verbName v <> " ") >> idLinkFor p t)
@@ -568,6 +573,7 @@ notRecordedText :: Text -> NotRecorded -> Text
 notRecordedText _ SpaceChanged = "the space changed since the page was drawn; nothing recorded\n"
 notRecordedText _ (UnknownId t) = "unknown id " <> t <> "\n"
 notRecordedText _ (NoReason t) = "defeat " <> t <> " needs a reason\n"
+notRecordedText _ (EditLocked l) = "the space is " <> Render.locked l <> "; nothing recorded\n"
 notRecordedText p (RulingRefused m r) = Render.refusal m p r
 
 backToPlaying :: Text -> [(Verb, Text)] -> Html ()

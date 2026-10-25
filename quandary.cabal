@@ -112,6 +112,7 @@ library
     , optparse-applicative
     , stm
     , text
+    , time
     , vty
     , wai
     , warp
@@ -161,5 +162,6 @@ test-suite spec
     , tasty-quickcheck
     , temporary
     , text
+    , time
     , toysolver
     , wai

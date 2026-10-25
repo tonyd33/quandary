@@ -2,14 +2,15 @@ module Quandary.Shell.Options
   ( Options (..)
   , Command (..)
   , SpaceCommand (..)
+  , Access (..)
   , Action (..)
   , Format (..)
-  , writes
   , parse
   )
 where
 
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Version (showVersion)
 import Options.Applicative
 import Paths_quandary (version)
@@ -30,7 +31,13 @@ data SpaceCommand
   = Check
   | Browse
   | Serve String Int
-  | OnModel Action
+  | Lock Text
+  | Unlock
+  | OnModel Access Action
+
+-- | Whether an action writes points, and whether it writes while the
+-- space is locked for an edit.
+data Access = Reading | Writing | Forcing
 
 data Action
   = Status
@@ -52,27 +59,6 @@ data Action
   | Diff Text Text
   | Graph Format
 
--- | Holds when the action writes points.
-writes :: Action -> Bool
-writes (Accept _) = True
-writes (Defeat _) = True
-writes (Exhaust _) = True
-writes (Settle _) = True
-writes (Reopen _) = True
-writes (Defer _) = True
-writes (Prefer _ _) = True
-writes PointNew {} = True
-writes (PointRm _) = True
-writes (Adopt _ _) = True
-writes Status = False
-writes (Show _) = False
-writes (Why _) = False
-writes (Whatif _) = False
-writes Rulings = False
-writes Links = False
-writes (Diff _ _) = False
-writes (Graph _) = False
-
 data Format = Mermaid | Dot
 
 parse :: IO Options
@@ -91,6 +77,11 @@ options =
           <> spaceCommand "check" "Report every problem in the space and its points" (pure Check)
           <> spaceCommand "browse" "Browse the space in the terminal, following changes to its files" (pure Browse)
           <> spaceCommand "serve" "Serve the space as web pages, following changes to its files" (Serve <$> bind <*> port)
+          <> spaceCommand
+            "lock"
+            "Lock the space for an edit, for the reason given"
+            (Lock . Text.unwords <$> some (positional "REASON"))
+          <> spaceCommand "unlock" "Check the space, then release its edit lock" (pure Unlock)
           <> modelCommand "status" "The frontier, then closed, deferred and dormant questions, then the points" (pure Status)
           <> modelCommand "show" "A question's options, verdicts, rulings and raised questions" (Show <$> positional "QUESTION")
           <> modelCommand "why" "Every set of rulings that makes an option impossible or forced" (Why <$> positional "OPTION")
@@ -98,30 +89,30 @@ options =
             "whatif"
             "What would move if the rulings were applied, as accept|defeat|reopen ID... groups"
             (Whatif <$> some (positional "VERB|ID"))
-          <> modelCommand
+          <> writingCommand
             "accept"
             "Accept each option, with an optional reason after them"
             (Accept <$> some (positional "OPTION... [--] [REASON]"))
-          <> modelCommand
+          <> writingCommand
             "defeat"
             "Defeat each option, for the reason after them"
             (Defeat <$> some (positional "OPTION... [--] REASON"))
-          <> modelCommand
+          <> writingCommand
             "exhaust"
             "Say each question's listed options are all there is, for the reason after them"
             (Exhaust <$> some (positional "QUESTION... [--] REASON"))
-          <> modelCommand
+          <> writingCommand
             "settle"
             "Defeat every option of each question still possible, for the reason after them"
             (Settle <$> some (positional "QUESTION... [--] REASON"))
-          <> modelCommand
+          <> writingCommand
             "reopen"
             "Drop each option's ruling, inherited ones included, or each question's deferral"
             (Reopen <$> some (positional "ID"))
-          <> modelCommand "defer" "Leave a question off the frontier" (Defer <$> positional "QUESTION")
-          <> modelCommand "prefer" "Rank an option 0 to 10, or - to clear" (Prefer <$> positional "OPTION" <*> positional "N")
-          <> modelCommand "point" "Create or remove a point" (hsubparser (pointNew <> pointRm))
-          <> modelCommand
+          <> writingCommand "defer" "Leave a question off the frontier" (Defer <$> positional "QUESTION")
+          <> writingCommand "prefer" "Rank an option 0 to 10, or - to clear" (Prefer <$> positional "OPTION" <*> positional "N")
+          <> spaceCommand "point" "Create or remove a point" (hsubparser (pointNew <> pointRm))
+          <> writingCommand
             "adopt"
             "Move a branch's rulings into the point it extends and remove it"
             ( Adopt
@@ -152,19 +143,21 @@ formatNamed "mermaid" = Right Mermaid
 formatNamed "dot" = Right Dot
 formatNamed f = Left ("unknown format " <> f <> ", expected mermaid or dot")
 
-pointNew :: Mod CommandFields Action
+pointNew :: Mod CommandFields SpaceCommand
 pointNew =
   subcommand
     "new"
     "Create an empty point, extending another if given"
-    ( PointNew
-        <$> positional "NAME"
-        <*> optional (positional "EXTENDS")
-        <*> switch (long "proposed" <> help "Mark the point as holding an agent's proposals")
+    ( writing
+        ( PointNew
+            <$> positional "NAME"
+            <*> optional (positional "EXTENDS")
+            <*> switch (long "proposed" <> help "Mark the point as holding an agent's proposals")
+        )
     )
 
-pointRm :: Mod CommandFields Action
-pointRm = subcommand "rm" "Remove a point no other point extends" (PointRm <$> positional "NAME")
+pointRm :: Mod CommandFields SpaceCommand
+pointRm = subcommand "rm" "Remove a point no other point extends" (writing (PointRm <$> positional "NAME"))
 
 subcommand :: String -> String -> Parser a -> Mod CommandFields a
 subcommand name desc p = command name (info p (progDesc desc))
@@ -173,7 +166,16 @@ spaceCommand :: String -> String -> Parser SpaceCommand -> Mod CommandFields Com
 spaceCommand name desc p = subcommand name desc (InSpace <$> p)
 
 modelCommand :: String -> String -> Parser Action -> Mod CommandFields Command
-modelCommand name desc p = spaceCommand name desc (OnModel <$> p)
+modelCommand name desc p = spaceCommand name desc (OnModel Reading <$> p)
+
+writingCommand :: String -> String -> Parser Action -> Mod CommandFields Command
+writingCommand name desc p = spaceCommand name desc (writing p)
+
+writing :: Parser Action -> Parser SpaceCommand
+writing p =
+  OnModel
+    <$> flag Writing Forcing (long "force" <> help "Write even while the space is locked for an edit")
+    <*> p
 
 positional :: String -> Parser Text
 positional meta = strArgument (metavar meta)

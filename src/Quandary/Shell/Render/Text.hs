@@ -1,5 +1,8 @@
 module Quandary.Shell.Render.Text
   ( problem
+  , locked
+  , lockNotice
+  , unlocked
   , status
   , showQuestion
   , showOption
@@ -75,6 +78,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Time (LocalTime, defaultTimeLocale, formatTime)
 import Quandary.Core.Analyse
 import Quandary.Core.Analyse qualified as Analyse
 import Quandary.Core.Compile (Constraint (..))
@@ -86,6 +90,35 @@ import Quandary.Core.View
 import Quandary.Shell.Search (Hit (..), Place (..), Results (..), Snippet (..), Target (..))
 import Quandary.Shell.Storage.Files
 import Quandary.Shell.Storage.Yaml (YamlIssue (..))
+
+-- | Returns `locked for an edit since HH:MM (Nm ago): REASON`.
+locked :: EditLock -> Text
+locked l =
+  "locked for an edit since "
+    <> clock l.since
+    <> " ("
+    <> tshow (floor (l.age / 60) :: Int)
+    <> "m ago): "
+    <> l.reason
+
+-- | Returns what a live or lapsed edit lock warns of.
+lockNotice :: LockState -> Maybe Text
+lockNotice Unlocked = Nothing
+lockNotice (Locked l) = Just ("the space is " <> locked l)
+lockNotice (Lapsed l t) =
+  Just ("the edit lock lapsed at " <> clock t <> " without unlock: " <> l.reason <> "; the edit may be unfinished")
+
+-- | Returns what `unlock` released, and each ruling written over the lock.
+unlocked :: LockState -> [Text] -> [Text]
+unlocked Unlocked _ = ["not locked"]
+unlocked (Locked l) forced = ("unlocked: " <> l.reason) : forcedLines forced
+unlocked (Lapsed l t) forced = ("unlocked: " <> l.reason <> " (lapsed at " <> clock t <> ")") : forcedLines forced
+
+forcedLines :: [Text] -> [Text]
+forcedLines = map ("ruled while locked: " <>)
+
+clock :: LocalTime -> Text
+clock = Text.pack . formatTime defaultTimeLocale "%H:%M"
 
 problem :: FilePath -> FileProblem -> Text
 problem root p = Text.pack p.file <> maybe "" (\l -> ":" <> tshow l) p.line <> ": " <> message

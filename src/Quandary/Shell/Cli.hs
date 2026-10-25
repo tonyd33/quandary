@@ -1,6 +1,8 @@
 module Quandary.Shell.Cli (main) where
 
-import Control.Monad (forM_)
+import Control.Exception (IOException, catch)
+import Control.Monad (forM_, when)
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Quandary.Core.Validate
@@ -26,16 +28,24 @@ import Quandary.Shell.Command.Status qualified as Status
 import Quandary.Shell.Command.Whatif qualified as Whatif
 import Quandary.Shell.Command.Why qualified as Why
 import Quandary.Shell.Env (Env (..))
-import Quandary.Shell.Exit (failWith)
-import Quandary.Shell.Options (Action (..), Command (..), Options (..), SpaceCommand (..))
+import Quandary.Shell.Exit (failWith, warn)
+import Quandary.Shell.Options (Access (..), Action (..), Command (..), Options (..), SpaceCommand (..))
 import Quandary.Shell.Options qualified as Options
 import Quandary.Shell.Render.Text qualified as Render
+import Quandary.Shell.Storage.Files (LockState (..), Override (..))
 import Quandary.Shell.Storage.Files qualified as Files
-import System.Exit (ExitCode, exitWith)
+import System.Exit (ExitCode (..), exitWith)
 import System.IO (stderr)
 
 main :: IO ()
-main = Options.parse >>= run >>= exitWith
+main = do
+  o <- Options.parse
+  code <- run o `catch` unexpected
+  exitWith code
+
+-- | Report a failed read or write without a backtrace.
+unexpected :: IOException -> IO ExitCode
+unexpected e = failWith (Text.pack (show e))
 
 run :: Options -> IO ExitCode
 run o = case o.command of
@@ -50,22 +60,54 @@ inSpace :: Options -> SpaceCommand -> IO ExitCode
 inSpace o command = case command of
   Browse -> Browse.run o.dir o.point
   Serve address port -> Serve.run o.dir o.point address port
-  Check -> do
-    (loaded, v) <- validated
-    Check.run o.dir (Files.problemsOf o.dir loaded v) v.model
-  OnModel action -> lockedFor action $ do
+  Check -> check
+  Lock reason -> lockFor o.dir reason
+  Unlock -> do
+    code <- check
+    (state, forced) <- Files.unlockEdit o.dir
+    code <$ Text.putStr (Text.unlines (Render.unlocked state forced))
+  OnModel access action -> guarded o.dir access $ \override -> do
     (loaded, v) <- validated
     forM_ (Files.problemsOf o.dir loaded v) (Text.hPutStrLn stderr . Render.problem o.dir)
     case Files.usableModel loaded v of
-      Just m -> dispatch (Env o.dir o.point m) action
+      Just m -> dispatch (Env o.dir o.point m override) action
       Nothing -> failWith "the space has problems; nothing done"
   where
-    lockedFor action
-      | Options.writes action = Files.withRulingLock o.dir
-      | otherwise = id
+    check = do
+      (loaded, v) <- validated
+      Check.run o.dir (Files.problemsOf o.dir loaded v) v.model
     validated = do
       loaded <- Files.readSpace o.dir
       pure (loaded, validate loaded.sources)
+
+-- | Run the command against the edit lock: warn of it when reading; when
+-- writing, hold the ruling lock and refuse while the edit lock is live,
+-- unless forced.
+guarded :: FilePath -> Access -> (Override -> IO ExitCode) -> IO ExitCode
+guarded dir Reading k = Files.editLock dir >>= warnOf >> k KeepLock
+guarded dir Writing k =
+  Files.withRulingLock dir $
+    Files.editLock dir >>= \case
+      Locked l -> failWith ("the space is " <> Render.locked l <> "; nothing done (--force writes anyway)")
+      state -> warnOf state >> k KeepLock
+guarded dir Forcing k =
+  Files.withRulingLock dir $
+    Files.editLock dir >>= \case
+      Locked _ -> k OverrideLock
+      state -> warnOf state >> k KeepLock
+
+-- | Print the lock, live or lapsed, as a warning.
+warnOf :: LockState -> IO ()
+warnOf = mapM_ warn . Render.lockNotice
+
+-- | Lock the space for an edit, for the reason.
+lockFor :: FilePath -> Text -> IO ExitCode
+lockFor dir reason
+  | Text.null (Text.strip reason) = failWith "lock needs a reason"
+  | otherwise =
+      Files.lockForEdit dir reason >>= \case
+        Left held -> failWith ("the space is already " <> Render.locked held)
+        Right stored -> ExitSuccess <$ Text.putStrLn ("locked for an edit: " <> stored)
 
 dispatch :: Env -> Action -> IO ExitCode
 dispatch env Status = Status.run env

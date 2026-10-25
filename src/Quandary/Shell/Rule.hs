@@ -16,7 +16,7 @@ import System.Exit (ExitCode (..))
 
 rule :: Env -> [Edit] -> IO ExitCode
 rule env es =
-  ruled env.dir env.model env.point es >>= \case
+  ruled env.dir env.override env.model env.point es >>= \case
     Left (m, r) -> failLines (Render.refusal m env.point r <> abandoned)
     Right steps -> ExitSuccess <$ Text.putStr (Text.unlines (concatMap (Render.stepLines env.point) steps))
   where
@@ -24,13 +24,15 @@ rule env es =
       | length es > 1 = "nothing ruled\n"
       | otherwise = ""
 
--- | Apply the edits to the named point and write it, returning each step.
+-- | Apply the edits to the named point and write it, recording each step
+-- when the write overrides the edit lock, returning each step.
 -- When they would leave the point stale, write nothing and return the
 -- refusal with the model it applies to.
-ruled :: FilePath -> Model -> Text -> [Edit] -> IO (Either (Model, Refusal) [Step])
-ruled dir m name es =
+ruled :: FilePath -> Files.Override -> Model -> Text -> [Edit] -> IO (Either (Model, Refusal) [Step])
+ruled dir override m name es =
   Analyse.edit Cadical.cadical m name es >>= \case
     Left refused -> pure (Left refused)
     Right steps -> do
       Files.writePoint dir (pointNamed (last (m : map (.model) steps)).points name)
+      Files.recordOverride dir override [Render.ruled s.edit s.applied <> " at " <> name | s <- steps]
       pure (Right steps)

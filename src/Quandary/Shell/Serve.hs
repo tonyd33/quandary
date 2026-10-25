@@ -24,6 +24,7 @@ import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
 import Quandary.Shell.Render.Html (document, graphElements, link, titledDocument)
 import Quandary.Shell.Resolve (Verb, verbNamed)
+import Quandary.Shell.Storage.Files (Override (..))
 import Text.Read (readMaybe)
 
 app :: Live -> Text -> Int -> Application
@@ -50,7 +51,7 @@ recordFrom :: Live -> Text -> Request -> IO Response
 recordFrom live p req =
   recordings . parseQuery . Lazy.toStrict <$> strictRequestBody req >>= \case
     Nothing -> pure (plain status400 "a malformed record form\n")
-    Just (rev, rs) -> responseOf (titledDocument p ("record at " <> p)) <$> record live p rev rs
+    Just (rev, override, rs) -> responseOf (titledDocument p ("record at " <> p)) <$> record live p rev override rs
 
 -- | Holds when the request's `Origin` is this server as its `Host` names it.
 sameOrigin :: Request -> Bool
@@ -58,18 +59,24 @@ sameOrigin req = case (lookup "Origin" (requestHeaders req), requestHeaderHost r
   (Just origin, Just host) -> origin == "http://" <> host
   _ -> False
 
--- | Returns the revision the form was drawn at and each supposition with
--- its reason, in order: a verb and id, then a reason.
-recordings :: Query -> Maybe (Revision, [(Verb, Text, Text)])
-recordings (("revision", Just r) : rest) = (,) <$> revisionOf r <*> go rest
+-- | Returns the revision the form was drawn at, whether it overrides the
+-- edit lock, and each supposition with its reason, in order: a verb and
+-- id, then a reason.
+recordings :: Query -> Maybe (Revision, Override, [(Verb, Text, Text)])
+recordings q = do
+  rev <- revisionOf =<< join (lookup "revision" q)
+  rs <- suppositions [item | item@(k, _) <- q, k `notElem` ["revision", "force"]]
+  pure (rev, override, rs)
   where
-    go [] = Just []
-    go (item : ("reason", Just reason) : more) = do
-      (v, t) <- supposition item
-      one <- (,,) v t <$> decoded reason
-      (one :) <$> go more
-    go _ = Nothing
-recordings _ = Nothing
+    override = if isJust (lookup "force" q) then OverrideLock else KeepLock
+
+suppositions :: Query -> Maybe [(Verb, Text, Text)]
+suppositions [] = Just []
+suppositions (item : ("reason", Just reason) : more) = do
+  (v, t) <- supposition item
+  one <- (,,) v t <$> decoded reason
+  (one :) <$> suppositions more
+suppositions _ = Nothing
 
 revisionOf :: ByteString -> Maybe Revision
 revisionOf t = Revision <$> readMaybe (Char8.unpack t)
