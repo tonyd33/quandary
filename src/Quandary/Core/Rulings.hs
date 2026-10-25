@@ -12,6 +12,7 @@ module Quandary.Core.Rulings
   , lineage
   , descendants
   , effective
+  , orderedRulings
   , rulingsOf
   , deferredAt
   , preferenceAt
@@ -140,6 +141,13 @@ effective points name = foldr layer Map.empty (lineage points name)
         , Map.mapWithKey (\o r -> (Refuse o, p.name, r)) p.defeat
         , Map.withoutKeys inherited p.drop
         ]
+
+-- | Returns the effective rulings at the named point, accepts then
+-- defeats, each group by option.
+--
+-- Preconditions: no cycle of `extends`.
+orderedRulings :: Map Text Point -> Text -> [(Literal, Text, Ruling)]
+orderedRulings points name = sortOn (\(l, _, _) -> l) (Map.elems (effective points name))
 
 rulingsOf :: Map Text Point -> Text -> Set Literal
 rulingsOf points name = Set.fromList [l | (l, _, _) <- Map.elems (effective points name)]

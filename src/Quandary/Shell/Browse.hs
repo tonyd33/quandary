@@ -82,6 +82,7 @@ data Route
   | QuestionAt Text Id
   | OptionAt Text Text
   | Points
+  | RulingsAt Text
   | WhatifAt Text [(Verb, Text)]
   | GraphAt Text Dead
   | -- | Played when it holds suppositions, even none.
@@ -96,6 +97,7 @@ routePoint (StatusAt p) = p
 routePoint (QuestionAt p _) = p
 routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
+routePoint (RulingsAt p) = p
 routePoint (WhatifAt p _) = p
 routePoint (GraphAt p _) = p
 routePoint (BoxAt p _ _) = p
@@ -106,6 +108,7 @@ routeTitle (StatusAt p) = "point " <> p
 routeTitle (QuestionAt p q) = idText q <> " at " <> p
 routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
+routeTitle (RulingsAt p) = "rulings at " <> p
 routeTitle (WhatifAt p _) = "whatif at " <> p
 routeTitle (GraphAt p _) = "graph at " <> p
 routeTitle (BoxAt p _ Nothing) = "box at " <> p
@@ -117,6 +120,8 @@ data Page
   | QuestionPage QuestionView
   | OptionPage OptionView
   | PointsPage [PointView]
+  | -- | The point's rulings, each with the point it comes from.
+    RulingsPage Text [(Literal, Text, Ruling)]
   | WhatifPage Text [Supposition] (Either EditError Whatif)
   | GraphPage Text Dead Graph.Graph
   | BoxPage Box
@@ -298,6 +303,7 @@ build b (BoxAt p dead (Just ws)) = atPoint b.model p $ case traverse (supposed b
     Left _ -> pure (NotFound "a supposition does not apply at the point")
     Right models -> BoxPage <$> playedBox b p dead ws models
 build b (RecordAt p ws) = atPoint b.model p (pure (RecordPage p ws))
+build b (RulingsAt p) = atPoint b.model p (pure (RulingsPage p (Rulings.orderedRulings b.model.points p)))
 build b Points = PointsPage . View.pointViews b.model <$> staleNames b
 build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
   Left t -> pure (NotFound ("unknown id " <> t))

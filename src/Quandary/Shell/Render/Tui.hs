@@ -131,6 +131,7 @@ pageWidget f parsed d = case d.shown of
     PointsPage ps -> body "points" BodyView (pointsWidget ps)
     GraphPage {} -> note "graph" "serve draws the graph"
     BoxPage {} -> note "box" "serve draws the box"
+    RulingsPage {} -> note "rulings" "serve lists the rulings"
     RecordPage {} -> note "record" "serve records from the box"
     RecordedPage {} -> note "record" "serve records from the box"
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))

@@ -14,7 +14,7 @@ import Data.Foldable (toList)
 import Data.List (intersperse)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -43,6 +43,7 @@ link (StatusAt p) = path ["p", p]
 link (QuestionAt p (Id q)) = path (["p", p, "q"] ++ Text.splitOn "/" q)
 link (OptionAt p o) = path (["p", p, "o"] ++ Text.splitOn "/" o)
 link Points = path ["points"]
+link (RulingsAt p) = path ["p", p, "rulings"]
 link (WhatifAt p ws) = path ["p", p, "whatif"] <> query [(verbName v, t) | (v, t) <- ws]
 link (GraphAt p dead) = path ["p", p, "graph"] <> deadQuery dead
 link (BoxAt p dead play) = path ["p", p, "box"] <> boxQuery dead play
@@ -93,6 +94,8 @@ titledDocument point title d = doctypehtml_ $ do
       " "
       a_ [href_ (link (GraphAt point HideDead))] "graph"
       " "
+      a_ [href_ (link (RulingsAt point))] "rulings"
+      " "
       a_ [href_ (link Points)] "points"
       " "
       form_ [method_ "get", action_ (path ["p", point, "go"])] $
@@ -118,6 +121,7 @@ pageHtml d = case d.shown of
     QuestionPage v -> questionHtml m.space v
     OptionPage v -> optionHtml m v
     PointsPage ps -> pointsHtml ps
+    RulingsPage p rs -> rulingsHtml p rs
     WhatifPage p ss r -> whatifHtml p ss r
     GraphPage p dead g -> graphHtml p dead g
     BoxPage box -> boxHtml box
@@ -210,9 +214,7 @@ notesHtml :: Text -> [[Render.Chunk]] -> Html ()
 notesHtml p = sequence_ . intersperse (br_ []) . map (chunksHtml p)
 
 whatifButtons :: Text -> OptionRow -> Html ()
-whatifButtons p r = form_ [method_ "get", action_ (link (WhatifAt p []))] $
-  forM_ ([AcceptVerb, DefeatVerb] ++ [ReopenVerb | reopenable r]) $ \verb ->
-    button_ [name_ (verbName verb), value_ (optionName r.option)] (toHtml (verbName verb))
+whatifButtons p r = verbButtons p ([AcceptVerb, DefeatVerb] ++ [ReopenVerb | reopenable r]) r.option
 
 -- | Returns every set of rulings making the option forced or impossible,
 -- each with the constraints giving the verdict with it.
@@ -331,6 +333,26 @@ pointsHtml ps = do
   table_ $ forM_ ps $ \pv -> tr_ $ do
     td_ (a_ [href_ (link (StatusAt pv.point.name))] (toHtml pv.point.name))
     td_ (toHtml (Render.pointNote pv))
+
+rulingsHtml :: Text -> [(Literal, Text, Ruling)] -> Html ()
+rulingsHtml p rs = do
+  section "accepted" [r | r@(Take _, _, _) <- rs]
+  section "defeated" [r | r@(Refuse _, _, _) <- rs]
+  where
+    section heading [] = h1_ heading >> p_ [class_ "detail"] "none"
+    section heading ruled = do
+      h1_ heading
+      table_ [class_ "options"] $ forM_ ruled $ \r@(l, _, given) -> tr_ $ do
+        td_ (optionLink p (optionOf l))
+        td_ (toHtml (fromMaybe "" given.title))
+        td_ [class_ "detail"] (toHtml (Render.rulingNote p r))
+        td_ (verbButtons p [ReopenVerb] (optionOf l))
+
+-- | Returns a whatif button for each verb on the option.
+verbButtons :: Text -> [Verb] -> OptionId -> Html ()
+verbButtons p verbs o = form_ [method_ "get", action_ (link (WhatifAt p []))] $
+  forM_ verbs $
+    \verb -> button_ [name_ (verbName verb), value_ (optionName o)] (toHtml (verbName verb))
 
 whatifHtml :: Text -> [Supposition] -> Either EditError Whatif -> Html ()
 whatifHtml p ss r = do

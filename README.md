@@ -391,6 +391,7 @@ Order: question comes after questions of its raisers. Of questions that may come
 | `/p/POINT/record?accept=O&defeat=O` | form recording suppositions as rulings at `POINT`, a reason for each, required for `defeat`; reached from `record` in played box |
 | `POST /p/POINT/rule` | records form's suppositions as `accept` and `defeat` do, holding `.quandary/rulings.lock`; writes nothing when space changed since form was drawn, a `defeat` lacks a reason, or rulings would leave point stale; answers with what moved or why nothing was written |
 | `/p/POINT/graph` | graph: each question a box holding its options, coloured by verdict, edges for raising; questions start collapsed; hovering option draws its `needs`, `needs-one-of` and `excludes` edges, to and from it, `constraints` draws every one; edge to option in collapsed question ends at question; click option to open its page, click question to expand or collapse it, double-click to open it |
+| `/p/POINT/rulings` | point's rulings, inherited included, as `rulings` lists them: accepted, then defeated, each option linked with title ruled on, reason, point it comes from unless `POINT`, and `reopen` opening whatif |
 | `/points` | points |
 | `/p/POINT/whatif?accept=O&defeat=O&reopen=ID` | whatif, suppositions in query order, ids as `whatif` takes them |
 

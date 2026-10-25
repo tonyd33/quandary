@@ -86,6 +86,7 @@ routes =
       , OptionAt "current" "sync/git"
       , OptionAt "current" "sync/how.other"
       , Points
+      , RulingsAt "current"
       , GraphAt "current" HideDead
       , GraphAt "current" ShowDead
       , BoxAt "current" HideDead Nothing
@@ -207,6 +208,20 @@ pages =
       assertBool
         (Text.unpack rendered)
         ("<span class=\"grade\" data-help=\"does not work\">broken</span>" `Text.isInfixOf` rendered)
+  , testCase "the rulings page lists accepts then defeats, inherited ones with their point" $
+      pageAt (RulingsAt "edit-offline") >>= \case
+        RulingsPage _ rs ->
+          [(l, from) | (l, from, _) <- rs]
+            @?= [ (Take (listed "conflict/diff"), "edit-offline")
+                , (Take (listed "store/files"), "current")
+                , (Take (listed "sync/git"), "edit-offline")
+                , (Refuse (listed "conflict/silent"), "current")
+                , (Refuse (listed "sync/lww"), "current")
+                ]
+        _ -> assertFailure "not a rulings page"
+  , testCase "the rulings page offers to reopen a ruling" $ do
+      rendered <- htmlAt (RulingsAt "current")
+      assertBool (Text.unpack rendered) ("<button name=\"reopen\" value=\"sync/lww\">reopen</button>" `Text.isInfixOf` rendered)
   , testCase "a question's id is no option" $
       pageAt (OptionAt "current" "sync/how") >>= \case
         NotFound t -> t @?= "unknown option sync/how"

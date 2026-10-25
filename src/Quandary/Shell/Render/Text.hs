@@ -27,6 +27,7 @@ module Quandary.Shell.Render.Text
   , refusal
   , editError
   , rulingLine
+  , rulingNote
   , rulings
   , links
   , diff
@@ -781,7 +782,7 @@ rulings :: Model -> Text -> Text
 rulings m name =
   Text.unlines $
     ["point " <> name <> maybe "" (" extends " <>) (pointNamed m.points name).extends, ""]
-      ++ [rulingLine m name l | (l, _, _) <- sortOn order (Map.elems (effective m.points name))]
+      ++ [rulingLine m name l | (l, _, _) <- orderedRulings m.points name]
       ++ ["drop " <> optionName o <> " (" <> p.name <> ")" | p <- chain, o <- Set.toList p.drop]
       ++ ["defer " <> idText q <> " (" <> p.name <> ")" | p <- chain, q <- Set.toList p.defer]
       ++ [ "prefer " <> optionName o <> " " <> tshow (rankValue n) <> " (" <> from o <> ")"
@@ -789,7 +790,6 @@ rulings m name =
          ]
   where
     chain = lineage m.points name
-    order (l, _, _) = (case l of Take _ -> 0 :: Int; Refuse _ -> 1, optionOf l)
     from o = case [p.name | p <- chain, Map.member o p.prefer] of
       p : _ -> p
       [] -> name

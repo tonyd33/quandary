@@ -136,6 +136,7 @@ route _ ["points"] _ = Just Points
 route _ ["p", p] _ = Just (StatusAt p)
 route _ ("p" : p : "q" : i@(_ : _)) _ = Just (QuestionAt p (Id (Text.intercalate "/" i)))
 route _ ("p" : p : "o" : i@(_ : _)) _ = Just (OptionAt p (Text.intercalate "/" i))
+route _ ["p", p, "rulings"] _ = Just (RulingsAt p)
 route _ ["p", p, "whatif"] q = WhatifAt p <$> traverse supposition q
 route _ ["p", p, "graph"] q = Just (GraphAt p (dead q))
 route _ ["p", p, "record"] q = RecordAt p <$> traverse supposition q
