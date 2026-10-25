@@ -4,19 +4,20 @@ module Quandary.Shell.Serve
   )
 where
 
+import Control.Monad (join)
 import Data.ByteString (ByteString)
 import Data.ByteString.Builder (byteString)
 import Data.ByteString.Char8 qualified as Char8
 import Data.ByteString.Lazy qualified as Lazy
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Encoding (decodeUtf8')
+import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Lucid (Html, renderBS)
 import Network.HTTP.Types
 import Network.Wai
 import Quandary.Core.Types
 import Quandary.Shell.Browse
-import Quandary.Shell.Render.Html (document)
+import Quandary.Shell.Render.Html (document, link)
 import Quandary.Shell.Resolve (Verb, verbNamed)
 
 app :: Live -> Text -> Int -> Application
@@ -29,18 +30,19 @@ app live point port req respond
       Nothing -> respond (plain status404 "not found\n")
       Just r -> do
         d <- page live r
-        respond (html (statusOf d) (document r d))
+        respond (responseOf r d)
 
-statusOf :: Drawn -> Status
-statusOf d = case d.shown of
-  Shown _ (NotFound _) -> status404
-  _ -> status200
+responseOf :: Route -> Drawn -> Response
+responseOf r d = case d.shown of
+  Shown _ (NotFound _) -> html status404 [] (document r d)
+  Shown _ (Redirect to) -> html status303 [(hLocation, encodeUtf8 (link to))] (document r d)
+  _ -> html status200 [] (document r d)
 
 plain :: Status -> ByteString -> Response
 plain s t = responseLBS s [(hContentType, "text/plain; charset=utf-8")] (Lazy.fromStrict t)
 
-html :: Status -> Html () -> Response
-html s h = responseLBS s [(hContentType, "text/html; charset=utf-8")] (renderBS h)
+html :: Status -> ResponseHeaders -> Html () -> Response
+html s hs h = responseLBS s ((hContentType, "text/html; charset=utf-8") : hs) (renderBS h)
 
 -- | Holds for `127.0.0.1:N` and `localhost:N`, where N is the port served.
 hostAllowed :: Int -> Maybe ByteString -> Bool
@@ -70,7 +72,9 @@ route point [] _ = Just (StatusAt point)
 route _ ["points"] _ = Just Points
 route _ ["p", p] _ = Just (StatusAt p)
 route _ ("p" : p : "q" : i@(_ : _)) _ = Just (QuestionAt p (Id (Text.intercalate "/" i)))
+route _ ("p" : p : "o" : i@(_ : _)) _ = Just (OptionAt p (Text.intercalate "/" i))
 route _ ["p", p, "whatif"] q = WhatifAt p <$> traverse supposition q
+route _ ["p", p, "go"] q = GoTo p <$> (join (lookup "id" q) >>= decoded)
 route _ _ _ = Nothing
 
 supposition :: QueryItem -> Maybe (Verb, Text)

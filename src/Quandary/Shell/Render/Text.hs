@@ -2,6 +2,18 @@ module Quandary.Shell.Render.Text
   ( problem
   , status
   , showQuestion
+  , showOption
+  , optionTitle
+  , optionFacts
+  , rulingVerb
+  , rulingSource
+  , rulingSummary
+  , valueText
+  , choiceNote
+  , pickText
+  , assessmentNote
+  , gradeName
+  , designVerb
   , why
   , because
   , ruled
@@ -21,6 +33,7 @@ module Quandary.Shell.Render.Text
   , stateText
   , tshow
   , questionTitle
+  , stateSuffix
   , questionShape
   , rowMark
   , rowDetail
@@ -204,7 +217,12 @@ choiceChunks space cs = case (map (choiceText space) cs.possible, map key cs.tak
 -- | Returns the option's key, rank and bounds, the bounds only when they
 -- leave out some grade.
 choiceText :: Space -> Choice -> Text
-choiceText space c = Text.unwords (filter (not . Text.null) [key c.option, rankText c.rank, value])
+choiceText space c = Text.unwords (filter (not . Text.null) [key c.option, choiceNote space c])
+
+-- | Returns the option's rank and bounds, the bounds only when they leave
+-- out some grade.
+choiceNote :: Space -> Choice -> Text
+choiceNote space c = Text.unwords (filter (not . Text.null) [rankText c.rank, value])
   where
     value = case c.bounds of
       Just b | b.lo > 0 || b.hi < topGrade space -> boundsText space b
@@ -265,19 +283,19 @@ implicationLines _ _ _ [] = []
 implicationLines m name s is = "" : "raises" : concatMap implication is
   where
     implication i = case i.values of
-      Nothing -> ("  " <> raisedTitle i.raising <> " [dormant]") : coRaiserLines i.raising
+      Nothing -> ("  " <> raisedTitle i.raising <> " [dormant]") : coRaiserLines "  " i.raising
       Just bs ->
         ("  " <> raisedTitle i.raising)
-          : coRaiserLines i.raising
+          : coRaiserLines "  " i.raising
           ++ filled "    " "      " (choiceChunks m.space (choicesAt m name bs s i.raising.question))
 
 raisedTitle :: Raising -> Text
 raisedTitle r = idText r.question.id <> ": " <> r.question.title
 
 -- | Returns the lines naming the options that raise the question alongside,
--- none when the options raise it alone.
-coRaiserLines :: Raising -> [Text]
-coRaiserLines r = maybe [] (\(lead, cs) -> filled ("    " <> lead) "      " (commas cs)) (coRaisers r)
+-- none when the options raise it alone, under a line indented as given.
+coRaiserLines :: Text -> Raising -> [Text]
+coRaiserLines indent r = maybe [] (\(lead, cs) -> filled (indent <> "  " <> lead) (indent <> "    ") (commas cs)) (coRaisers r)
 
 -- | Returns the options that raise the question alongside on one line.
 coRaiserText :: Raising -> Maybe Text
@@ -333,10 +351,15 @@ rowMark r = markText (mark r.ruling r.verdict)
 -- | Returns the option's title, bounds and rank, and its ruling's point
 -- and reason.
 rowDetail :: Space -> Text -> OptionRow -> Text
-rowDetail space name r = Text.intercalate "  " (filter (not . Text.null) [fromMaybe "" r.title, value, rankText r.rank, note])
+rowDetail space name r = Text.intercalate "  " (filter (not . Text.null) [fromMaybe "" r.title, valueText space r, note])
+  where
+    note = maybe "" (rulingNote name) r.ruling
+
+-- | Returns the option's bounds and rank.
+valueText :: Space -> OptionRow -> Text
+valueText space r = Text.intercalate "  " (filter (not . Text.null) [value, rankText r.rank])
   where
     value = maybe "" (("value " <>) . boundsText space) r.bounds
-    note = maybe "" (rulingNote name) r.ruling
 
 -- | Returns the ruling's reason, after the point it comes from unless that
 -- is the point given.
@@ -393,17 +416,66 @@ showQuestion space v =
   Text.unlines $
     [questionTitle v.analysis v.question, questionShape v.question, "", v.question.description, ""]
       ++ concat
-        [line : map ("  " <>) (rowNotes space r) ++ raises r | (r, line) <- zip v.rows (optionLines space v.point v.rows)]
+        [ line : map ("  " <>) (rowNotes space r) ++ raisesLines "  " r
+        | (r, line) <- zip v.rows (optionLines space v.point v.rows)
+        ]
+
+raisesLines :: Text -> OptionRow -> [Text]
+raisesLines indent r = concat [(indent <> "raises " <> raisedTitle rq) : coRaiserLines indent rq | rq <- r.raises]
+
+-- | Returns the option in full: its question, ruling, why it is forced or
+-- impossible, bounds, rank, grade, dominator, description and the
+-- questions it raises.
+showOption :: Model -> OptionView -> Text
+showOption m v =
+  Text.unlines $
+    [optionTitle v, "in " <> questionTitle v.analysis v.question]
+      ++ optionFacts m v
+      ++ paragraph [v.description | not (Text.null v.description)]
+      ++ paragraph (raisesLines "" v.row)
   where
-    raises r = concat [("  raises " <> raisedTitle rq) : coRaiserLines rq | rq <- r.raises]
+    paragraph [] = []
+    paragraph ls = "" : ls
+
+-- | Returns the option's id and title with its ruling, or else its verdict.
+optionTitle :: OptionView -> Text
+optionTitle v = optionName v.row.option <> maybe "" (": " <>) v.row.title <> state
+  where
+    state = case v.analysis of
+      Fresh _ -> " [" <> rowMark v.row <> "]"
+      StaleAt _ -> " [stale point]"
+
+-- | Returns the option's ruling with its point and reason, every set of
+-- rulings making it forced or impossible, its bounds and rank, grade and
+-- dominator.
+optionFacts :: Model -> OptionView -> [Text]
+optionFacts m v =
+  maybe [] (pure . rulingSummary v.point) v.row.ruling
+    ++ maybe [] (\verdict -> because m v.point (verdictText verdict) verdict v.row.option v.causes) causeVerdict
+    ++ filter (not . Text.null) [valueText m.space v.row]
+    ++ rowNotes m.space v.row
+  where
+    causeVerdict
+      | null v.causes = Nothing
+      | otherwise = v.row.verdict
+
+-- | Returns the ruling's verb, the point it comes from unless that is the
+-- point given, and its reason.
+rulingSummary :: Text -> (Literal, Text, Ruling) -> Text
+rulingSummary name (l, p, given) =
+  markText (mark (Just (l, p, given)) Nothing)
+    <> (if p == name then "" else " in " <> p)
+    <> maybe "" ((": " <>) . reasonText) given.reason
 
 -- | Returns the question's id and title with its state.
 questionTitle :: Analysis -> Question -> Text
-questionTitle a q = idText q.id <> ": " <> q.title <> state
-  where
-    state = case a of
-      Fresh s -> maybe "" (\st -> " [" <> stateText st <> "]") (Map.lookup q.id s.states)
-      StaleAt _ -> " [stale point]"
+questionTitle a q = idText q.id <> ": " <> q.title <> stateSuffix a q
+
+-- | Returns the question's state in brackets.
+stateSuffix :: Analysis -> Question -> Text
+stateSuffix a q = case a of
+  Fresh s -> maybe "" (\st -> " [" <> stateText st <> "]") (Map.lookup q.id s.states)
+  StaleAt _ -> " [stale point]"
 
 -- | Returns the question's pick and raisers.
 questionShape :: Question -> Text
@@ -427,22 +499,26 @@ why m name o v cores = case v of
 because :: Model -> Text -> Text -> Verdict -> OptionId -> [Set Literal] -> [Text]
 because _ _ opening _ _ [] = [opening]
 because m name opening v o cores
-  | any Set.null cores = ["no valid design " <> verb <> " " <> optionName o <> ", whatever the rulings"]
+  | any Set.null cores = ["no valid design " <> designVerb v <> " " <> optionName o <> ", whatever the rulings"]
   | otherwise = conflictLines m name (opening <> " because of:") "and because of:" cores
-  where
-    verb = case v of
-      Forced -> "refuses"
-      _ -> "takes"
+
+-- | Returns what no valid design does to an option with the verdict.
+designVerb :: Verdict -> Text
+designVerb Forced = "refuses"
+designVerb _ = "takes"
 
 rulingLine :: Model -> Text -> Literal -> Text
-rulingLine m name l = verb <> " " <> optionName (optionOf l) <> source
-  where
-    verb = case l of
-      Take _ -> "accept"
-      Refuse _ -> "defeat"
-    source = case rulingFrom m.points name l of
-      Just (p, r) -> " (" <> p <> maybe "" ((": " <>) . reasonText) r.reason <> ")"
-      Nothing -> ""
+rulingLine m name l = rulingVerb l <> " " <> optionName (optionOf l) <> rulingSource m name l
+
+rulingVerb :: Literal -> Text
+rulingVerb (Take _) = "accept"
+rulingVerb (Refuse _) = "defeat"
+
+-- | Returns the point the ruling comes from with its reason, in brackets.
+rulingSource :: Model -> Text -> Literal -> Text
+rulingSource m name l = case rulingFrom m.points name l of
+  Just (p, r) -> " (" <> p <> maybe "" ((": " <>) . reasonText) r.reason <> ")"
+  Nothing -> ""
 
 -- | Returns the moves, one line per question touched, rendered against
 -- the model they lead to. A question's implicit other is named only when

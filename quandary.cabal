@@ -69,6 +69,8 @@ library
     Quandary.Shell.Command.Why
     Quandary.Shell.Env
     Quandary.Shell.Exit
+    Quandary.Shell.Fuzzy
+    Quandary.Shell.Markdown
     Quandary.Shell.Options
     Quandary.Shell.Render.Dot
     Quandary.Shell.Render.Graph
@@ -87,7 +89,8 @@ library
     , async
     , brick
     , bytestring
-    , cmark
+    , commonmark
+    , commonmark-extensions
     , conduit
     , containers
     , directory
@@ -133,6 +136,7 @@ test-suite spec
     Storage
     Toysolver
   build-depends:
+    , async
     , bytestring
     , containers
     , directory

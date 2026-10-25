@@ -12,8 +12,14 @@ import Quandary.Shell.Solver.Cadical qualified as Cadical
 import System.Exit (ExitCode (..))
 
 run :: Env -> Text -> IO ExitCode
-run env q = Resolve.withQuestion env.model.space q $ \question -> do
-  a <- analysis env
-  v <- View.questionView Cadical.cadical env.model env.point a question
-  Text.putStr (Render.showQuestion env.model.space v)
-  pure (exitCode a)
+run env t = Resolve.withQuestionOrOption env.model.space t $ \case
+  Left question -> do
+    a <- analysis env
+    v <- View.questionView Cadical.cadical env.model env.point a question
+    Text.putStr (Render.showQuestion env.model.space v)
+    pure (exitCode a)
+  Right (question, o) -> do
+    a <- analysis env
+    v <- View.optionView Cadical.cadical env.model env.point a question o
+    Text.putStr (Render.showOption env.model v)
+    pure (exitCode a)

@@ -207,6 +207,94 @@ cli =
                   ]
               , ""
               )
+    , testCase "show on a possible option gives its question, body and the questions it raises" $ withCopy $ \dir -> do
+        r <- quandary dir ["show", "sync/git"]
+        r
+          @?= ( ExitSuccess
+              , unlines
+                  [ "sync/git: Git repo under the hood [possible]"
+                  , "in sync/how: How devices sync [open]"
+                  , ""
+                  , "The notes folder is a git repository; sync is commit, pull and push."
+                  , ""
+                  , "raises conflict/shown: What the user sees on a conflict"
+                  , "raises sync/merge-conflicts: Merge conflicts surface to non-technical users"
+                  ]
+              , ""
+              )
+    , testCase "show on an option defeated for no other cause gives its ruling alone" $ withCopy $ \dir -> do
+        r <- quandary dir ["show", "sync/lww"]
+        r
+          @?= ( ExitSuccess
+              , unlines
+                  [ "sync/lww: Last write wins per file [defeated]"
+                  , "in sync/how: How devices sync [open]"
+                  , "defeated: silently loses edits made offline"
+                  , ""
+                  , "The most recently written copy of a file replaces the others."
+                  , ""
+                  , "raises conflict/shown: What the user sees on a conflict"
+                  ]
+              , ""
+              )
+    , testCase "show on a defeated option impossible for another cause gives every set of rulings" $ withCopy $ \dir -> do
+        _ <- quandary dir ["defeat", "sync/crdt", "--", "too", "complex"]
+        (_, out, _) <- quandary dir ["show", "sync/crdt"]
+        take 7 (lines out)
+          @?= [ "sync/crdt: CRDT per note [defeated]"
+              , "in sync/how: How devices sync [open]"
+              , "defeated: too complex"
+              , "impossible because of:"
+              , "  accept store/files (current: must open in any editor)"
+              , "and because of:"
+              , "  defeat sync/crdt (current: too complex)"
+              ]
+    , testCase "show on an impossible option gives every set of rulings responsible" $ withCopy $ \dir -> do
+        (code, out, _) <- quandary dir ["show", "sync/crdt"]
+        code @?= ExitSuccess
+        take 4 (lines out)
+          @?= [ "sync/crdt: CRDT per note [impossible]"
+              , "in sync/how: How devices sync [open]"
+              , "impossible because of:"
+              , "  accept store/files (current: must open in any editor)"
+              ]
+    , testCase "show on a forced option gives every set of rulings responsible" $ withCopy $ \dir -> do
+        _ <- quandary dir ["exhaust", "sync/how", "--", "all", "there", "is"]
+        (code, out, _) <- quandary dir ["show", "sync/git"]
+        code @?= ExitSuccess
+        take 6 (lines out)
+          @?= [ "sync/git: Git repo under the hood [forced]"
+              , "in sync/how: How devices sync [closed]"
+              , "forced because of:"
+              , "  accept store/files (current: must open in any editor)"
+              , "  defeat sync/lww (current: silently loses edits made offline)"
+              , "  defeat sync/how.other (current: all there is)"
+              ]
+    , testCase "show on an option gives the point an inherited ruling comes from" $ withCopy $ \dir -> do
+        (_, out, _) <- quandary dir ["--point", "edit-offline", "show", "store/files"]
+        take 5 (lines out)
+          @?= [ "store/files: Plain Markdown files in a folder [accepted]"
+              , "in store/where: Where notes live on disk [closed]"
+              , "accepted in current: must open in any editor"
+              , "forced because of:"
+              , "  accept store/files (current: must open in any editor)"
+              ]
+    , testCase "show on an implicit other" $ withCopy $ \dir -> do
+        r <- quandary dir ["show", "sync/how.other"]
+        r @?= (ExitSuccess, unlines ["sync/how.other [possible]", "in sync/how: How devices sync [open]"], "")
+    , testCase "show on an option gives grades, bounds and dominance" $ withCopy $ \dir -> do
+        writeGraded dir
+        (_, out, _) <- quandary dir ["show", "extra/b"]
+        take 5 (lines out)
+          @?= [ "extra/b: B [possible]"
+              , "in extra/pick: Pick [open]"
+              , "value hack"
+              , "graded hack"
+              , "dominated: at best hack, below extra/a at worst clean"
+              ]
+    , testCase "show on an unknown id" $ withCopy $ \dir -> do
+        r <- quandary dir ["show", "sync/nope"]
+        r @?= (ExitFailure 1, "", "quandary: unknown question sync/nope\n")
     , testCase "status gives bounds that say something" $ withCopy $ \dir -> do
         writeGraded dir
         (code, out, _) <- quandary dir ["status"]

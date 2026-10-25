@@ -16,6 +16,7 @@ module Quandary.Core.Analyse
   , implications
   , topGrade
   , whyAll
+  , causes
   , edit
   , whatif
   , Supposition (..)

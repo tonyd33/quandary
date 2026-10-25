@@ -24,7 +24,7 @@ import Quandary.Core.Analyse
 import Quandary.Core.Compile (compile)
 import Quandary.Core.Solver
 import Quandary.Core.Types
-import Quandary.Core.View (QuestionView (..), questionView, statusBounds)
+import Quandary.Core.View (OptionView (..), QuestionView (..), optionView, questionView, statusBounds)
 import Quandary.Shell.Solver.Cadical (cadical)
 import Test.Tasty
 import Test.Tasty.QuickCheck
@@ -116,6 +116,15 @@ properties =
                   bs <- statusBounds solver m "current" a
                   vs <- mapM (questionView solver m "current" a) (Map.elems space.questions)
                   pure (a, bs, map (.rows) vs)
+             in ioProperty ((===) <$> facts bruteForce <*> facts cadical)
+    , testProperty "option views agree under brute force and CaDiCaL" $
+        forAll (genSpace >>= genGraded) $ \space ->
+          forAll (genPoint space) $ \p ->
+            let m = modelAt space p
+                facts solver = do
+                  a <- analyse solver m "current"
+                  vs <- sequence [optionView solver m "current" a q o | q <- Map.elems space.questions, o <- choices q]
+                  pure [(v.row, v.causes) | v <- vs]
              in ioProperty ((===) <$> facts bruteForce <*> facts cadical)
     ]
   where

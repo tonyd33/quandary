@@ -7,10 +7,10 @@ where
 
 import Brick
 import Brick.Widgets.Border (hBorder)
-import CMark qualified as M
-import Data.List (intersperse)
+import Data.List (intersperse, transpose)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Quandary.Shell.Markdown qualified as M
 
 codeAttr :: AttrName
 codeAttr = attrName "code"
@@ -18,33 +18,45 @@ codeAttr = attrName "code"
 headingAttr :: AttrName
 headingAttr = attrName "heading"
 
--- | Returns the Markdown's blocks one under another, code blocks verbatim.
+-- | Returns the GitHub-flavoured Markdown's blocks one under another, code
+-- blocks verbatim, tables in aligned columns.
 markdown :: Text -> Widget n
-markdown t = blocks ns
-  where
-    M.Node _ _ ns = M.commonmarkToNode [] t
+markdown = blocks . M.parse
 
-blocks :: [M.Node] -> Widget n
+blocks :: [M.Block] -> Widget n
 blocks [] = emptyWidget
-blocks ns = vBox (intersperse (txt " ") (map block ns))
+blocks bs = vBox (intersperse (txt " ") (map block bs))
 
-block :: M.Node -> Widget n
-block (M.Node _ ty ns) = case ty of
-  M.HEADING n -> withAttr headingAttr (txtWrap (Text.replicate n "#" <> " " <> inlines ns))
-  M.CODE_BLOCK _ code -> withAttr codeAttr (padLeft (Pad 2) (vBox (map (txt . verbatim) (Text.lines code))))
-  M.BLOCK_QUOTE -> txt "> " <+> blocks ns
-  M.LIST attrs -> vBox (zipWith listItem (bullets attrs) ns)
-  M.THEMATIC_BREAK -> hBorder
-  M.HTML_BLOCK html -> txtWrap html
-  _ -> txtWrap (inlines ns)
+block :: M.Block -> Widget n
+block (M.Paragraph is) = txtWrap (inlines is)
+block (M.Heading n _ is) = withAttr headingAttr (txtWrap (Text.replicate n "#" <> " " <> inlines is))
+block (M.CodeBlock code) = withAttr codeAttr (padLeft (Pad 2) (vBox (map (txt . verbatim) (Text.lines code))))
+block (M.Quote bs) = txt "> " <+> blocks bs
+block (M.List start items) = vBox (zipWith listItem (bullets start) items)
+block M.Rule = hBorder
+block (M.RawBlock html) = txtWrap html
+block (M.Table aligns header rows) = table aligns header rows
 
-listItem :: Text -> M.Node -> Widget n
-listItem bullet (M.Node _ _ children) = txt bullet <+> blocks children
+-- | Returns the table's rows in columns two apart, each cell aligned as
+-- its column says, a rule under the header row.
+table :: [M.Alignment] -> [[M.Inline]] -> [[[M.Inline]]] -> Widget n
+table aligns header rows = vBox (map txt (line headerCells : rule : map line bodyCells))
+  where
+    headerCells = map inlines header
+    bodyCells = map (map inlines) rows
+    widths = map (maximum . map Text.length) (transpose (headerCells : bodyCells))
+    line r = Text.stripEnd (Text.intercalate "  " (zipWith3 aligned (aligns ++ repeat M.AlignDefault) widths r))
+    rule = Text.intercalate "  " [Text.replicate w "\x2500" | w <- widths]
+    aligned M.AlignRight w = Text.justifyRight w ' '
+    aligned M.AlignCenter w = Text.center w ' '
+    aligned _ w = Text.justifyLeft w ' '
 
-bullets :: M.ListAttributes -> [Text]
-bullets attrs = case attrs.listType of
-  M.BULLET_LIST -> repeat "- "
-  M.ORDERED_LIST -> [Text.pack (show i) <> ". " | i <- [attrs.listStart ..]]
+listItem :: Text -> [M.Block] -> Widget n
+listItem bullet item = txt bullet <+> blocks item
+
+bullets :: Maybe Int -> [Text]
+bullets Nothing = repeat "- "
+bullets (Just start) = [Text.pack (show i) <> ". " | i <- [start ..]]
 
 -- | Returns the line with tabs as spaces and an empty line as one space.
 verbatim :: Text -> Text
@@ -52,16 +64,17 @@ verbatim l = case Text.replace "\t" "    " l of
   "" -> " "
   l' -> l'
 
-inlines :: [M.Node] -> Text
+inlines :: [M.Inline] -> Text
 inlines = foldMap inline
 
-inline :: M.Node -> Text
-inline (M.Node _ ty ns) = case ty of
-  M.TEXT t -> t
-  M.SOFTBREAK -> " "
-  M.LINEBREAK -> "\n"
-  M.CODE t -> "`" <> t <> "`"
-  M.HTML_INLINE t -> t
-  M.LINK url _ -> inlines ns <> " <" <> url <> ">"
-  M.IMAGE url _ -> "[" <> inlines ns <> "](" <> url <> ")"
-  _ -> inlines ns
+inline :: M.Inline -> Text
+inline (M.Str t) = t
+inline M.SoftBreak = " "
+inline M.LineBreak = "\n"
+inline (M.Code t) = "`" <> t <> "`"
+inline (M.RawInline t) = t
+inline (M.Emph is) = inlines is
+inline (M.Strong is) = inlines is
+inline (M.Strike is) = "~~" <> inlines is <> "~~"
+inline (M.Link url is) = inlines is <> " <" <> url <> ">"
+inline (M.Image url is) = "[" <> inlines is <> "](" <> url <> ")"

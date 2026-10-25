@@ -16,7 +16,6 @@ module Quandary.Shell.Storage.Files
   )
 where
 
-import CMark qualified as M
 import Control.Monad (forM, forM_, unless)
 import Data.ByteString qualified as ByteString
 import Data.Conduit (runConduitRes, (.|))
@@ -32,6 +31,7 @@ import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Quandary.Core.Source
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model, Validation (..))
+import Quandary.Shell.Markdown qualified as M
 import Quandary.Shell.Storage.Yaml
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeFile)
 import System.FilePath
@@ -208,21 +208,13 @@ bodyOf doc firstLine content =
     }
   where
     ls = Text.lines content
-    M.Node _ _ blocks = M.commonmarkToNode [] content
     headings =
-      [ (p.startLine, p.endLine, level, Text.strip (inlineText n))
-      | n@(M.Node (Just p) (M.HEADING level) _) <- blocks
+      [ (start, end, level, Text.strip (M.plainText is))
+      | M.Heading level (start, end) is <- M.parsePlain content
       , level <= 2
       ]
     starts = [start | (start, _, _, _) <- headings]
     slice from to = Text.unlines (take (to - from) (drop (from - 1) ls))
-
-inlineText :: M.Node -> Text
-inlineText (M.Node _ t children) = case t of
-  M.TEXT s -> s
-  M.CODE s -> s
-  M.SOFTBREAK -> " "
-  _ -> Text.concat (map inlineText children)
 
 -- | The keys a mapping may hold, each with its value.
 fields :: [Text] -> Yaml -> Decode (Map Text Yaml)

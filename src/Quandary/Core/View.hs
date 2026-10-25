@@ -1,6 +1,7 @@
 module Quandary.Core.View
   ( QuestionView (..)
   , OptionRow (..)
+  , OptionView (..)
   , Domination (..)
   , Objection (..)
   , RaisedOption (..)
@@ -14,6 +15,7 @@ module Quandary.Core.View
   , Whatif (..)
   , questionView
   , questionViewFrom
+  , optionView
   , statusBounds
   , statusGroups
   , choicesAt
@@ -22,6 +24,7 @@ module Quandary.Core.View
   )
 where
 
+import Control.Monad (mfilter)
 import Data.Foldable (toList)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Map.Strict (Map)
@@ -138,8 +141,11 @@ questionViewFrom m name a bs q =
     { point = name
     , question = q
     , analysis = a
-    , rows = map row (byPreference ranks q)
+    , rows = map (optionRow m name a bs) (byPreference (preferenceAt m.points name) q)
     }
+
+optionRow :: Model -> Text -> Analysis -> Map OptionId Bounds -> OptionId -> OptionRow
+optionRow m name a bs = row
   where
     ranks = preferenceAt m.points name
     rulings = effective m.points name
@@ -159,6 +165,38 @@ questionViewFrom m name a bs q =
             Just s -> objectionsTo m.space s o
             Nothing -> []
         }
+
+-- | An option of a question at a point, with every set of rulings making
+-- it forced or impossible.
+data OptionView = OptionView
+  { point :: Text
+  , question :: Question
+  , analysis :: Analysis
+  , row :: OptionRow
+  , description :: Text
+  , causes :: [Set Literal]
+  -- ^ Empty when the option's own ruling is the only cause.
+  }
+
+-- | Returns the option of the question at the point, bounding the
+-- question's options.
+optionView :: Monad m => Solver m -> Model -> Text -> Analysis -> Question -> OptionId -> m OptionView
+optionView solver m name a q o = do
+  bs <- maybe (pure Map.empty) (\s -> bounds solver m name s (choices q)) (standing a)
+  let row = optionRow m name a bs o
+  cs <- maybe (pure []) (causes solver m name o) (mfilter (/= Possible) row.verdict)
+  let ownRuling = [Set.singleton l | Just (l, _, _) <- [row.ruling]]
+  pure
+    OptionView
+      { point = name
+      , question = q
+      , analysis = a
+      , row
+      , description = case o of
+          Listed i -> maybe "" (\(_, opt) -> opt.description) (optionAt m.space i)
+          Other _ -> ""
+      , causes = if cs == ownRuling then [] else cs
+      }
 
 domination :: Map OptionId Bounds -> OptionId -> OptionId -> Domination
 domination bs o p = Domination p (bs Map.! o).hi (bs Map.! p).lo

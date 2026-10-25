@@ -19,11 +19,17 @@ module Quandary.Shell.Browse
   , nextPane
   , pageStanding
   , pageQuestion
+  , shownQuestion
+  , shownOption
   , pageRow
+  , pageOptions
+  , Target (..)
+  , targets
+  , targetRoute
+  , goToMatches
   , listedQuestions
   , listedIds
   , landing
-  , visibleOptions
   , reopenable
   , pointNames
   )
@@ -50,6 +56,7 @@ import Quandary.Core.Types
 import Quandary.Core.Validate
 import Quandary.Core.View
 import Quandary.Core.View qualified as View
+import Quandary.Shell.Fuzzy qualified as Fuzzy
 import Quandary.Shell.Resolve (Verb)
 import Quandary.Shell.Resolve qualified as Resolve
 import Quandary.Shell.Solver.Cadical (cadical)
@@ -62,28 +69,37 @@ import System.FilePath (makeRelative, normalise, takeFileName, (</>))
 data Route
   = StatusAt Text
   | QuestionAt Text Id
+  | OptionAt Text Text
   | Points
   | WhatifAt Text [(Verb, Text)]
+  | GoTo Text Text
   deriving (Eq, Ord, Show)
 
 -- | Returns the point the route is at, `current` for the points.
 routePoint :: Route -> Text
 routePoint (StatusAt p) = p
 routePoint (QuestionAt p _) = p
+routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
 routePoint (WhatifAt p _) = p
+routePoint (GoTo p _) = p
 
 routeTitle :: Route -> Text
 routeTitle (StatusAt p) = "point " <> p
 routeTitle (QuestionAt p q) = idText q <> " at " <> p
+routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
 routeTitle (WhatifAt p _) = "whatif at " <> p
+routeTitle (GoTo p t) = "go to " <> t <> " at " <> p
 
 data Page
   = StatusPage Text Analysis (Map OptionId Bounds) (Set Text)
   | QuestionPage QuestionView
+  | OptionPage OptionView
   | PointsPage [PointView]
   | WhatifPage Text [Supposition] (Either EditError Whatif)
+  | -- | The page the route names.
+    Redirect Route
   | NotFound Text
 
 newtype Revision = Revision Int
@@ -212,6 +228,14 @@ build b (QuestionAt p i) = atPoint b.model p $ case Map.lookup i b.model.space.q
   Just q -> do
     a <- analysisAt b p
     QuestionPage <$> View.questionView cadical b.model p a q
+build b (OptionAt p t) = atPoint b.model p $ case Resolve.optionWithQuestion b.model.space t of
+  Nothing -> pure (NotFound ("unknown option " <> t))
+  Just (q, o) -> do
+    a <- analysisAt b p
+    OptionPage <$> View.optionView cadical b.model p a q o
+build b (GoTo p t) = atPoint b.model p . pure $ case targets b.model.space of
+  ts | (_, target) : _ <- Fuzzy.ranked t ts -> Redirect (targetRoute p target)
+  _ -> NotFound ("no id matches " <> t)
 build b Points = PointsPage . View.pointViews b.model <$> staleNames b
 build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
   Left t -> pure (NotFound ("unknown id " <> t))
@@ -285,9 +309,10 @@ data Focus = Focus
   , expanded :: Set OptionId
   }
 
--- | A picker over the current page: the points, at the index selected, or
--- what to suppose of an option.
-data Overlay = PointPicker Int | WhatifPicker OptionId
+-- | A picker over the current page: the points, at the index selected;
+-- what to suppose of an option; or the ids matching the text typed, at the
+-- index selected.
+data Overlay = PointPicker Int | WhatifPicker OptionId | GoToPicker Text Int
 
 -- | A status group in the question list: its questions, or how many it
 -- holds when folded.
@@ -303,6 +328,7 @@ pageStanding :: Drawn -> Maybe (Model, Standing)
 pageStanding d = case d.shown of
   Shown m (StatusPage _ a _ _) -> (,) m <$> standing a
   Shown m (QuestionPage v) -> (,) m <$> standing v.analysis
+  Shown m (OptionPage v) -> (,) m <$> standing v.analysis
   _ -> Nothing
 
 pageQuestion :: Drawn -> Maybe QuestionView
@@ -310,9 +336,25 @@ pageQuestion d = case d.shown of
   Shown _ (QuestionPage v) -> Just v
   _ -> Nothing
 
--- | Returns the shown question's row for the option.
+-- | Returns the question the page shows, or whose option it shows.
+shownQuestion :: Drawn -> Maybe Id
+shownQuestion d = case d.shown of
+  Shown _ (QuestionPage v) -> Just v.question.id
+  Shown _ (OptionPage v) -> Just v.question.id
+  _ -> Nothing
+
+shownOption :: Drawn -> Maybe OptionId
+shownOption d = case d.shown of
+  Shown _ (OptionPage v) -> Just v.row.option
+  _ -> Nothing
+
+-- | Returns the row of the option among the shown question's options, or
+-- of the option shown.
 pageRow :: Drawn -> OptionId -> Maybe OptionRow
-pageRow d o = pageQuestion d >>= find ((== o) . (.option)) . (.rows)
+pageRow d o = case d.shown of
+  Shown _ (QuestionPage v) -> find ((== o) . (.option)) v.rows
+  Shown _ (OptionPage v) | v.row.option == o -> Just v.row
+  _ -> Nothing
 
 -- | Returns each group's questions, a folded group's only when it holds
 -- the shown question.
@@ -342,14 +384,41 @@ landing folded d = case d.shown of
     QuestionAt p <$> listToMaybe (concatMap listedIds (listedQuestions folded m p s Nothing))
   _ -> Nothing
 
--- | Returns the question's options in the order drawn, each expanded
--- option followed by the options of the questions it raises.
-visibleOptions :: Set OptionId -> QuestionView -> [OptionId]
-visibleOptions expanded v = concat [r.option : below r.option r.objections | r <- v.rows]
+-- | Returns the options the page lists in the order drawn: a question's
+-- options, each expanded one followed by the options of the questions it
+-- raises; an option's raised questions' options, likewise.
+pageOptions :: Set OptionId -> Drawn -> [OptionId]
+pageOptions expanded d = case d.shown of
+  Shown _ (QuestionPage v) -> concat [r.option : below r.option r.objections | r <- v.rows]
+  Shown _ (OptionPage v) -> raised v.row.objections
+  _ -> []
   where
+    raised obs = concat [c.option : below c.option c.objections | ob <- obs, c <- ob.options]
     below o obs
-      | Set.member o expanded = concat [c.option : below c.option c.objections | ob <- obs, c <- ob.options]
+      | Set.member o expanded = raised obs
       | otherwise = []
+
+-- | What going to an id opens.
+data Target = ToQuestion Id | ToOption OptionId
+  deriving (Eq, Show)
+
+-- | Returns every question and option id, as written, with what it opens.
+targets :: Space -> [(Text, Target)]
+targets space =
+  concat
+    [ (idText q.id, ToQuestion q.id) : [(optionName o, ToOption o) | o <- choices q]
+    | q <- Map.elems space.questions
+    ]
+
+-- | Returns the ids of the shown space the text matches, best first.
+goToMatches :: Text -> Drawn -> [(Text, Target)]
+goToMatches t d = case d.shown of
+  Shown m _ -> Fuzzy.ranked t (targets m.space)
+  Problems _ -> []
+
+targetRoute :: Text -> Target -> Route
+targetRoute p (ToQuestion q) = QuestionAt p q
+targetRoute p (ToOption o) = OptionAt p (optionName o)
 
 -- | Holds when the row has a ruling to reopen.
 reopenable :: OptionRow -> Bool

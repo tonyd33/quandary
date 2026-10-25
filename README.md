@@ -67,6 +67,19 @@ possible    sync/how.other
 
 Question raised only with other options names them under it: `with any of a, b`.
 
+`show` on option gives its question, its ruling with point and reason, and, when forced or impossible for more than its own ruling, every set of rulings responsible, as `why` words them:
+
+```
+$ quandary show sync/lww
+sync/lww: Last write wins per file [defeated]
+in sync/how: How devices sync [open]
+defeated: silently loses edits made offline
+
+The most recently written copy of a file replaces the others.
+
+raises conflict/shown: What the user sees on a conflict
+```
+
 Ask why option out:
 
 ```
@@ -300,6 +313,7 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 | `check` | report every problem in space and points, every stale point; exit 1 if any, else print `ok` |
 | `status` | frontier in decision order, each question's possible options by preference, with bounds unless spanning every grade; then open questions with option taken; then other open questions no taken option raises, with raisers; then closed, deferred, dormant questions; then every point: fresh or stale, proposed, whether it rules anything beyond point it extends |
 | `show QUESTION` | options with verdicts, rulings, grades, bounds, whether one dominated; under each option, each question it raises, once, with title, and on line below, options raising it alongside: `with a`, `with any of a, (b with c)`; none when option raises it alone |
+| `show OPTION` | option's title with ruling or verdict; its question with state; its ruling, `accepted` or `defeated`, with point it comes from unless this one, and reason; when forced or impossible, every set of rulings `why` lists, none when its own ruling is the only set; bounds and rank, grade, dominator, as in `show QUESTION`; description; each question it raises, with co-raisers |
 | `why OPTION` | every set of rulings making `OPTION` impossible or forced |
 | `whatif VERB ID ... [VERB ID ...]` | changes if rulings applied, with every conflicting set of rulings if they leave point stale; unless stale, then `raises`: every question accepted options raise, with title and co-raisers as in `show`, `[dormant]` when live in no design reaching new point, else options as in `status` at new point; each verb `accept`, `defeat` or `reopen` followed by ids, no reasons |
 | `accept OPTION... [--] [REASON]` | accept each; refuses, writing nothing, if any would leave point stale |
@@ -332,23 +346,25 @@ Order: question comes after questions of its raisers. Of questions that may come
 `browse` and `serve` read space live, never write it. A change to `quandary.yaml` or a Markdown file under `questions/`, `notes/` or `points/` redraws the page shown after 100ms without further changes; other files, `.jj` and `.git` included, are ignored. Pages:
 
 - status: what `status` prints.
-- question: what `show` prints, description and each option's body rendered from Markdown, code blocks verbatim; under each option, questions it raises with their states and options' verdicts, and theirs in turn.
+- question: what `show` prints, description and each option's body rendered from GitHub-flavoured Markdown (tables, strikethrough, autolinks), code blocks verbatim, tables as aligned columns in `browse`; under each option, questions it raises with their states and options' verdicts, and theirs in turn in `browse`; `serve` shows one level, each raised question collapsed, deeper ones through the links.
+- option: what `show OPTION` prints, its body rendered from Markdown; questions it raises as on question page.
 - points: every point as in `status`.
-- not found: unknown point, question or whatif id.
+- not found: unknown point, question, option or whatif id; go-to text matching no id.
 - whatif: what `whatif` prints for the suppositions.
 
-`browse` opens point's first listed question, and its status page only when it lists none: stale, or no questions. It lists point's questions on the left, grouped as in `status`, closed and deferred folded to a count unless one is shown; selected question on the right as in `show` but options by key, at most half the height, scrolling beyond; selected option's body, or question's description, below. Question list as wide as its longest id, at most a third of the width, cutting longer ids with `…`. Keys:
+`browse` opens point's first listed question, and its status page only when it lists none: stale, or no questions. It lists point's questions on the left, grouped as in `status`, closed and deferred folded to a count unless one is shown; selected question on the right as in `show` but options by key, at most half the height, scrolling beyond; selected option's body, or question's description, below. Question list as wide as its longest id, at most a third of the width, cutting longer ids with `…`. Option page shows option as `show OPTION` does on the right, its question selected on the left, its body below. Go-to matches text when its characters appear in id in order, ignoring case; best first: characters at start of id or after `/` count most, then after `-`, `_` or `.`, then right after previous match, each character skipped between matches costing; ties shorter id first. Keys:
 
 | key | does |
 |---|---|
 | `j`/`k`, down/up | next/previous question, option or line in focused pane |
 | `tab` | focus next pane: questions, options, body |
-| `enter` | on question: focus options; on option of another question: open it; else fold or unfold option's raised questions |
+| `enter` | on question: focus options; on option: open its page |
 | `space` | fold or unfold selected option's raised questions |
-| `u` | open question of first option raising this one |
+| `u` | on question: open question of first option raising it; on option page: open its question |
+| `g` | go to id: type to narrow every question and option id, best match first (up/down, `enter`, `esc`) |
 | `z` | fold or unfold closed and deferred questions |
 | `p` | pick point (`j`/`k`, `enter`, `esc`) |
-| `w` | on option: whatif, then `a` accept, `d` defeat, `r` reopen, `esc` cancel |
+| `w` | on option, or option page with none selected: whatif, then `a` accept, `d` defeat, `r` reopen, `esc` cancel |
 | `backspace` | back to previous page |
 | `q`, ctrl-c | quit |
 
@@ -359,10 +375,12 @@ Order: question comes after questions of its raisers. Of questions that may come
 | `/` | status at `--point` |
 | `/p/POINT` | status at `POINT` |
 | `/p/POINT/q/QUESTION` | question, e.g. `/p/current/q/sync/how` |
+| `/p/POINT/o/OPTION` | option, e.g. `/p/current/o/sync/git`, `/p/current/o/sync/how.other` |
+| `/p/POINT/go?id=TEXT` | 303 to page of id best matching `TEXT`, as `g` in `browse`; not found when none matches |
 | `/points` | points |
 | `/p/POINT/whatif?accept=O&defeat=O&reopen=ID` | whatif, suppositions in query order, ids as `whatif` takes them |
 
-Not found page answers 404. Each page reloads itself when space changes, through server-sent events on `/events?since=REVISION`. Server binds `127.0.0.1` only, answers 403 to `Host` other than `127.0.0.1:N` or `localhost:N`, and drops raw HTML from bodies.
+Every page links each option id or key to option's page, and has go-to box. Question page states raisers once, as links; each question raised under option folded to its `raises` line and option count until opened. Not found page answers 404. Each page reloads itself when space changes, through server-sent events on `/events?since=REVISION`. Server binds `127.0.0.1` only, answers 403 to `Host` other than `127.0.0.1:N` or `localhost:N`, and drops raw HTML from bodies.
 
 ## License
 

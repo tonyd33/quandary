@@ -2,6 +2,7 @@ module Quandary.Shell.Command.Browse (run) where
 
 import Brick
 import Brick.BChan (BChan, newBChan, writeBChan)
+import Control.Applicative ((<|>))
 import Control.Concurrent.Async (withAsync)
 import Control.Monad (forM_, mfilter, when)
 import Control.Monad.IO.Class (liftIO)
@@ -10,10 +11,11 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Graphics.Vty qualified as Vty
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
-import Quandary.Core.View (QuestionView (..))
+import Quandary.Core.View (OptionView (..), QuestionView (..))
 import Quandary.Shell.Browse
   ( Drawn (..)
   , Focus (..)
@@ -92,7 +94,8 @@ key p Vty.KEnter = enter p
 key _ (Vty.KChar ' ') = selected >>= mapM_ toggle
 key _ Vty.KBS = goBack
 key _ (Vty.KChar 'p') = openPointPicker
-key _ (Vty.KChar 'w') = selected >>= mapM_ (setOverlay . WhatifPicker)
+key _ (Vty.KChar 'g') = setOverlay (GoToPicker "" 0)
+key _ (Vty.KChar 'w') = whatifOption >>= mapM_ (setOverlay . WhatifPicker)
 key _ (Vty.KChar 'z') = modify (\t -> t {folded = not t.folded})
 key _ (Vty.KChar 'u') = openRaiser
 key _ _ = pure ()
@@ -107,6 +110,15 @@ overlayKey (PointPicker i) Vty.KEnter = do
   names <- gets (Browse.pointNames . (.drawn))
   closeOverlay
   forM_ (names !? i) (open . StatusAt)
+overlayKey (GoToPicker t i) Vty.KDown = moveGoTo t i 1
+overlayKey (GoToPicker t i) Vty.KUp = moveGoTo t i (-1)
+overlayKey (GoToPicker t _) Vty.KBS = setOverlay (GoToPicker (Text.dropEnd 1 t) 0)
+overlayKey (GoToPicker t i) Vty.KEnter = do
+  found <- gets (\tui -> Browse.goToMatches t tui.drawn !? i)
+  closeOverlay
+  p <- gets (Browse.routePoint . (.route))
+  forM_ found (open . Browse.targetRoute p . snd)
+overlayKey (GoToPicker t _) (Vty.KChar c) = setOverlay (GoToPicker (Text.snoc t c) 0)
 overlayKey (WhatifPicker o) (Vty.KChar 'a') = suppose AcceptVerb o
 overlayKey (WhatifPicker o) (Vty.KChar 'd') = suppose DefeatVerb o
 overlayKey (WhatifPicker o) (Vty.KChar 'r') = do
@@ -125,6 +137,11 @@ openPointPicker :: EventM Name Tui ()
 openPointPicker = do
   t <- get
   setOverlay (PointPicker (fromMaybe 0 (elemIndex (Browse.routePoint t.route) (Browse.pointNames t.drawn))))
+
+moveGoTo :: Text -> Int -> Int -> EventM Name Tui ()
+moveGoTo t i d = do
+  n <- gets (length . Browse.goToMatches t . (.drawn))
+  setOverlay (GoToPicker t (max 0 (min (n - 1) (i + d))))
 
 movePointPicker :: Int -> Int -> EventM Name Tui ()
 movePointPicker i d = do
@@ -150,9 +167,9 @@ move Questions d =
       forM_ (step d shown ids) $ \i -> goTo t.back (QuestionAt (Browse.routePoint t.route) i)
     Nothing -> scrollBody d
 move Options d =
-  gets (Browse.pageQuestion . (.drawn)) >>= \case
-    Just v -> selectOption d v
-    Nothing -> scrollBody d
+  gets (\t -> Browse.pageOptions t.focus.expanded t.drawn) >>= \case
+    [] -> scrollBody d
+    os -> selectOption d os
 move Reading d = scrollBody d
 
 -- | Returns the question shown and the questions listed, when the page
@@ -160,13 +177,13 @@ move Reading d = scrollBody d
 questionIds :: Tui -> Maybe (Maybe Id, [Id])
 questionIds t = do
   (m, s) <- Browse.pageStanding t.drawn
-  let shown = (.question.id) <$> Browse.pageQuestion t.drawn
+  let shown = Browse.shownQuestion t.drawn
   pure (shown, concatMap Browse.listedIds (Browse.listedQuestions t.folded m (Browse.routePoint t.route) s shown))
 
-selectOption :: Int -> QuestionView -> EventM Name Tui ()
-selectOption d v = do
+selectOption :: Int -> [OptionId] -> EventM Name Tui ()
+selectOption d os = do
   t <- get
-  forM_ (step d t.focus.option (Browse.visibleOptions t.focus.expanded v)) $ \o ->
+  forM_ (step d t.focus.option os) $ \o ->
     put t {focus = t.focus {option = Just o}}
 
 scrollBody :: Int -> EventM Name Tui ()
@@ -183,22 +200,13 @@ step d from xs = case from >>= (`elemIndex` xs) of
 
 enter :: Pane -> EventM Name Tui ()
 enter Questions = setPane Options
-enter Options = selected >>= mapM_ openOrToggle
+enter Options = selected >>= mapM_ openOption
 enter Reading = pure ()
 
--- | Open the option's question when it is not the one shown, else expand
--- or collapse the option.
-openOrToggle :: OptionId -> EventM Name Tui ()
-openOrToggle o =
-  gets (\t -> otherQuestion t.drawn o) >>= \case
-    Just q -> openQuestion q
-    Nothing -> toggle o
-
--- | Returns the option's question when the page shows another question.
-otherQuestion :: Drawn -> OptionId -> Maybe Id
-otherQuestion d o = case d.shown of
-  Shown m (QuestionPage v) -> mfilter (/= v.question.id) (questionOf m.space o)
-  _ -> Nothing
+openOption :: OptionId -> EventM Name Tui ()
+openOption o = do
+  p <- gets (Browse.routePoint . (.route))
+  open (OptionAt p (optionName o))
 
 openQuestion :: Id -> EventM Name Tui ()
 openQuestion q = do
@@ -206,16 +214,22 @@ openQuestion q = do
   open (QuestionAt p q)
 
 openRaiser :: EventM Name Tui ()
-openRaiser = gets (firstRaiser . (.drawn)) >>= mapM_ openQuestion
+openRaiser = gets (up . (.drawn)) >>= mapM_ openQuestion
 
--- | Returns the question of the first option raising the one shown.
-firstRaiser :: Drawn -> Maybe Id
-firstRaiser d = case d.shown of
+-- | Returns the question of the first option raising the question shown,
+-- or the question of the option shown.
+up :: Drawn -> Maybe Id
+up d = case d.shown of
   Shown m (QuestionPage v) | (o :| _) : _ <- v.question.raisedBy -> questionOf m.space o
+  Shown _ (OptionPage v) -> Just v.question.id
   _ -> Nothing
 
 selected :: EventM Name Tui (Maybe OptionId)
 selected = gets (.focus.option)
+
+-- | Returns the selected option, else the option shown.
+whatifOption :: EventM Name Tui (Maybe OptionId)
+whatifOption = gets (\t -> t.focus.option <|> Browse.shownOption t.drawn)
 
 toggle :: OptionId -> EventM Name Tui ()
 toggle o = modify (\t -> t {focus = t.focus {expanded = flipped t.focus.expanded}})
@@ -255,7 +269,7 @@ refresh :: EventM Name Tui ()
 refresh = do
   t <- get
   (r, d) <- liftIO (arrive t.live t.folded t.route)
-  let kept = maybe Set.empty (Set.fromList . Browse.visibleOptions t.focus.expanded) (Browse.pageQuestion d)
+  let kept = Set.fromList (Browse.pageOptions t.focus.expanded d)
   put
     t
       { route = r

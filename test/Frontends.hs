@@ -1,20 +1,32 @@
 module Frontends (frontends) where
 
+import Control.Concurrent.Async (forConcurrently)
+import Control.Exception (evaluate)
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.Maybe (isJust)
+import Data.Set qualified as Set
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TextIO
 import Data.Text.Lazy qualified as LazyText
 import Fixtures (fixture, listed, withCopy)
 import Lucid (renderBS, renderText)
-import Network.HTTP.Types (Status (..), decodePath, status200, status403, status404)
-import Network.Wai (defaultRequest, pathInfo, requestHeaderHost, responseStatus)
+import Network.HTTP.Types (Status (..), decodePath, hLocation, parseQuery, status200, status303, status403, status404)
+import Network.Wai (defaultRequest, pathInfo, queryString, requestHeaderHost, responseHeaders, responseStatus)
 import Network.Wai.Internal (ResponseReceived (..))
 import Quandary.Core.Analyse (Analysis (..))
 import Quandary.Core.Rulings (EditError (..))
 import Quandary.Core.Types
-import Quandary.Core.View (Objection (..), OptionRow (..), PointView (..), QuestionView (..), Whatif (..))
+import Quandary.Core.View
+  ( Objection (..)
+  , OptionRow (..)
+  , OptionView (..)
+  , PointView (..)
+  , QuestionView (..)
+  , Whatif (..)
+  )
 import Quandary.Shell.Browse
+import Quandary.Shell.Fuzzy (ranked, score)
 import Quandary.Shell.Render.Html (document, link, markdown)
 import Quandary.Shell.Resolve (Verb (..))
 import Quandary.Shell.Serve (app, route)
@@ -33,6 +45,7 @@ frontends =
     [ testGroup "routes" routes
     , testGroup "pages" pages
     , testGroup "html" html
+    , testGroup "go to" goTo
     , testGroup "server" server
     , testGroup "live" live
     ]
@@ -44,7 +57,10 @@ routes =
       [ StatusAt "current"
       , StatusAt "a/b"
       , QuestionAt "current" (Id "sync/how")
+      , OptionAt "current" "sync/git"
+      , OptionAt "current" "sync/how.other"
       , Points
+      , GoTo "current" "pseqrp"
       , WhatifAt "edit-offline" []
       , WhatifAt
           "current"
@@ -81,6 +97,26 @@ pages =
           [idText o.raising.question.id | r <- v.rows, r.option == listed "sync/git", o <- r.objections]
             @?= ["conflict/shown", "sync/merge-conflicts"]
         _ -> assertFailure "not a question page"
+  , testCase "an impossible option's page gives every set of rulings responsible" $
+      pageAt (OptionAt "current" "sync/crdt") >>= \case
+        OptionPage v -> do
+          (v.question.id, v.row.verdict) @?= (Id "sync/how", Just Impossible)
+          v.causes @?= [Set.singleton (Take (listed "store/files"))]
+        _ -> assertFailure "not an option page"
+  , testCase "an option defeated for no other cause has no causes" $
+      pageAt (OptionAt "current" "sync/lww") >>= \case
+        OptionPage v -> (v.row.verdict, v.causes) @?= (Just Impossible, [])
+        _ -> assertFailure "not an option page"
+  , testCase "a possible option's page gives the questions it raises and no causes" $
+      pageAt (OptionAt "current" "sync/git") >>= \case
+        OptionPage v -> do
+          [idText o.raising.question.id | o <- v.row.objections] @?= ["conflict/shown", "sync/merge-conflicts"]
+          v.causes @?= []
+        _ -> assertFailure "not an option page"
+  , testCase "a question's id is no option" $
+      pageAt (OptionAt "current" "sync/how") >>= \case
+        NotFound t -> t @?= "unknown option sync/how"
+        _ -> assertFailure "found"
   , testCase "the points page lists every point, none stale" $
       pageAt Points >>= \case
         PointsPage ps -> [(pv.point.name, pv.stale) | pv <- ps] @?= [("current", False), ("edit-offline", False)]
@@ -128,6 +164,19 @@ html =
               (renderText (markdown "Hi <script>alert(1)</script> there.\n\n<script>alert(2)</script>\n\n[x](javascript:alert(3))\n"))
       assertBool (Text.unpack out) (not ("<script" `Text.isInfixOf` out))
       assertBool (Text.unpack out) (not ("javascript:" `Text.isInfixOf` out))
+  , testCase "bodies render alike when rendered concurrently" $ do
+      let body i = "| n | x |\n|---|---|\n| " <> Text.pack (show i) <> " | y |\n\n~~gone " <> Text.pack (show i) <> "~~\n"
+      outs <- forConcurrently [1 .. 64 :: Int] $ \i -> evaluate (LazyText.toStrict (renderText (markdown (body i))))
+      sequence_
+        [ assertBool (Text.unpack out) (all (`Text.isInfixOf` out) ["<td>" <> n <> "</td>", "<del>gone " <> n <> "</del>"])
+        | (i, out) <- zip [1 :: Int ..] outs
+        , let n = Text.pack (show i)
+        ]
+  , testCase "a body renders GitHub-flavoured tables, strikethrough and autolinks" $ do
+      let out = LazyText.toStrict (renderText (markdown "| a | b |\n|---|---|\n| 1 | 2 |\n\n~~gone~~ https://example.org\n"))
+      assertBool (Text.unpack out) ("<table>" `Text.isInfixOf` out && "<td>1</td>" `Text.isInfixOf` out)
+      assertBool (Text.unpack out) ("<del>gone</del>" `Text.isInfixOf` out)
+      assertBool (Text.unpack out) ("<a href=\"https://example.org\">" `Text.isInfixOf` out)
   ]
 
 server :: [TestTree]
@@ -149,11 +198,49 @@ server =
        ]
 
 statusFor :: Maybe Text.Text -> [Text.Text] -> IO Status
-statusFor host path = withLive fixture $ \l -> do
+statusFor host path = fst <$> responseFor host path ""
+
+-- | Returns the status and the `Location` header answering the request.
+responseFor :: Maybe Text.Text -> [Text.Text] -> Text.Text -> IO (Status, Maybe Text.Text)
+responseFor host path q = withLive fixture $ \l -> do
   got <- newIORef Nothing
-  let req = defaultRequest {requestHeaderHost = Text.encodeUtf8 <$> host, pathInfo = path}
-  _ <- app l "current" 8080 req (\res -> ResponseReceived <$ writeIORef got (Just (responseStatus res)))
+  let req =
+        defaultRequest
+          { requestHeaderHost = Text.encodeUtf8 <$> host
+          , pathInfo = path
+          , queryString = parseQuery (Text.encodeUtf8 q)
+          }
+      seen res = (responseStatus res, Text.decodeUtf8 <$> lookup hLocation (responseHeaders res))
+  _ <- app l "current" 8080 req (\res -> ResponseReceived <$ writeIORef got (Just (seen res)))
   readIORef got >>= maybe (assertFailure "no response") pure
+
+goTo :: [TestTree]
+goTo =
+  [ testCase "pseqrp finds pattern/sequence/run-parsers first" $
+      map fst (ranked "pseqrp" (map (\t -> (t, ())) ids))
+        @?= ["pattern/sequence/run-parsers", "pattern/sequence/run-views/prefix-view", "pattern/sequence/run-views/names/prelude"]
+  , testCase "a query out of order matches nothing" $ score "srp" "pattern/sequence" @?= Nothing
+  , testCase "case is ignored" $ assertBool "no match" (isJust (score "SH" "sync/how"))
+  , testCase "a match at a segment start beats one inside a word" $
+      map fst (ranked "sh" [("sash", ()), ("sync/how", ())]) @?= ["sync/how", "sash"]
+  , testCase "consecutive characters beat scattered ones" $
+      map fst (ranked "ab" [("xaxb", ()), ("xab", ())]) @?= ["xab", "xaxb"]
+  , testCase "shorter ids go first on ties" $
+      map fst (ranked "sync/how" [("sync/how.other", ()), ("sync/how", ())]) @?= ["sync/how", "sync/how.other"]
+  , testCase "an empty query lists every id, shorter first" $
+      map fst (ranked "" [("bb", ()), ("a", ())]) @?= ["a", "bb"]
+  , testCase "go redirects to the best match's question" $
+      responseFor (Just "localhost:8080") ["p", "current", "go"] "?id=synchow"
+        >>= (@?= (status303, Just "/p/current/q/sync/how"))
+  , testCase "go redirects to the best match's option" $
+      responseFor (Just "localhost:8080") ["p", "edit-offline", "go"] "?id=lww"
+        >>= (@?= (status303, Just "/p/edit-offline/o/sync/lww"))
+  , testCase "go to an id nothing matches answers 404" $
+      responseFor (Just "localhost:8080") ["p", "current", "go"] "?id=zzz" >>= (@?= (status404, Nothing))
+  ]
+  where
+    ids =
+      ["pattern/sequence/run-views/prefix-view", "pattern/sequence/run-views/names/prelude", "pattern/sequence/run-parsers"]
 
 live :: [TestTree]
 live =

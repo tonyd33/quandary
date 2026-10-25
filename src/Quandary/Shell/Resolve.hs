@@ -1,6 +1,8 @@
 module Quandary.Shell.Resolve
   ( withOption
   , withQuestion
+  , withQuestionOrOption
+  , optionWithQuestion
   , reopening
   , Verb (..)
   , verbName
@@ -31,6 +33,21 @@ withOption space t k = maybe (failWith (notAnOption space t)) k (resolveOption s
 
 withQuestion :: Space -> Text -> (Question -> IO ExitCode) -> IO ExitCode
 withQuestion space q k = maybe (failWith (notAQuestion space q)) k (Map.lookup (Id q) space.questions)
+
+-- | Run the continuation on the question with the id, else on the option
+-- with its question.
+withQuestionOrOption :: Space -> Text -> (Either Question (Question, OptionId) -> IO ExitCode) -> IO ExitCode
+withQuestionOrOption space t k = case (Map.lookup (Id t) space.questions, optionWithQuestion space t) of
+  (Just q, _) -> k (Left q)
+  (Nothing, Just qo) -> k (Right qo)
+  (Nothing, Nothing) -> failWith ("unknown question " <> t)
+
+-- | Returns the option with the id and its question.
+optionWithQuestion :: Space -> Text -> Maybe (Question, OptionId)
+optionWithQuestion space t = do
+  o <- resolveOption space t
+  q <- questionContaining space o
+  pure (q, o)
 
 reopening :: Space -> Text -> Maybe PointEdit
 reopening space t = Reopen <$> resolveOption space t <|> Undefer . (.id) <$> Map.lookup (Id t) space.questions

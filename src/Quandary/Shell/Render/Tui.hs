@@ -35,7 +35,7 @@ import Quandary.Shell.Browse qualified as Browse
 import Quandary.Shell.Render.Markdown (codeAttr, headingAttr, markdown)
 import Quandary.Shell.Render.Text qualified as Render
 
-data Name = QuestionList | OptionList | BodyView | PointList | WhatifView
+data Name = QuestionList | OptionList | BodyView | PointList | WhatifView | GoToList
   deriving (Eq, Ord, Show)
 
 selectedAttr, dimAttr, focusedAttr :: AttrName
@@ -72,7 +72,9 @@ footer :: Widget Name
 footer =
   withAttr
     dimAttr
-    (txtWrap " j/k move  tab pane  enter open  space fold  u raiser  z closed  backspace back  p point  w whatif  q quit")
+    ( txtWrap
+        " j/k move  tab pane  enter open  space fold  u up  g go to  z closed  backspace back  p point  w whatif  q quit"
+    )
 
 -- | Returns the list as wide as its widest line, at most a third of the
 -- screen.
@@ -81,7 +83,7 @@ questionList t m s =
   hLimitPercent 33 . hLimit (widest + 2) . paneFrame t.focus Questions "Questions" . viewport QuestionList Vertical . vBox $
     map snd ls
   where
-    shown = (.question.id) <$> Browse.pageQuestion t.drawn
+    shown = Browse.shownQuestion t.drawn
     ls = concatMap listing (Browse.listedQuestions t.folded m (Browse.routePoint t.route) s shown)
     widest = maximum (Text.length (padded "Questions") + 2 : map (Text.length . fst) ls)
     listing (Unfolded k ids) = dim (Render.groupTitle k) : map entry ids
@@ -122,6 +124,8 @@ pageWidget f d = case d.shown of
   Shown m pg -> case pg of
     StatusPage p a bs ss -> body ("point " <> p) BodyView (statusWidget m p a bs ss)
     QuestionPage v -> questionWidget f m.space v
+    OptionPage v -> optionWidget f m v
+    Redirect r -> framed "go to" (padRight Max (padLeftRight 1 (txtWrap (Browse.routeTitle r))))
     PointsPage ps -> body "points" BodyView (pointsWidget ps)
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
     NotFound t -> framed "not found" (padRight Max (padLeftRight 1 (txtWrap t)))
@@ -198,6 +202,19 @@ questionWidget f space v =
     nonEmpty "" = " "
     nonEmpty d = d
 
+optionWidget :: Focus -> Model -> OptionView -> Widget Name
+optionWidget f m v =
+  vBox
+    [ paneFrame f Options (Render.optionTitle v)
+        . fitted OptionList
+        . padRight Max
+        . padLeftRight 1
+        . vBox
+        $ wrappedLines (("in " <> Render.questionTitle v.analysis v.question) : Render.optionFacts m v)
+          : [vBox [txt " ", objectionTree f v.row.objections] | not (null v.row.objections)]
+    , paneFrame f Reading "description" (scrolled BodyView (padLeftRight 1 (markdown v.description)))
+    ]
+
 -- | Returns the widget in a viewport as tall as its content, at most half
 -- the height available.
 fitted :: Name -> Widget Name -> Widget Name
@@ -264,6 +281,16 @@ overlayWidget t (WhatifPicker o) =
           <> whatifKeys (any Browse.reopenable (Browse.pageRow t.drawn o))
           <> "esc cancel "
       )
+overlayWidget t (GoToPicker typed i) =
+  centerLayer . framed "go to" . hLimit 60 $
+    vBox
+      [ txt (" > " <> typed)
+      , vLimit (min 15 (max 1 (length matches))) . viewport GoToList Vertical . vBox $
+          [highlighted (n == i) (padRight Max (txt (padded name))) | (n, (name, _)) <- zip [0 ..] matches]
+      , withAttr dimAttr (txt " up/down move  enter open  esc cancel ")
+      ]
+  where
+    matches = Browse.goToMatches typed t.drawn
 
 whatifKeys :: Bool -> Text
 whatifKeys True = "r reopen  "
