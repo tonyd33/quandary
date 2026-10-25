@@ -3,7 +3,9 @@ module Properties (properties) where
 import BruteForce (bruteForce, bruteForceOn)
 import Control.Monad (forM)
 import Data.Functor.Identity (runIdentity)
+import Data.List (sortOn, subsequences)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, isNothing, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Fixtures (modelAt)
@@ -26,6 +28,7 @@ import Quandary.Core.Analyse
   , whatif
   )
 import Quandary.Core.Compile (compile, constraints)
+import Quandary.Core.Next (Lead (..), Move (..), leads)
 import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Core.View (OptionView (..), QuestionView (..), optionView, questionView, statusBounds)
@@ -161,6 +164,18 @@ properties =
                   vs <- mapM (questionView solver m "current" a) (Map.elems space.questions)
                   pure (a, bs, map (.rows) vs)
              in ioProperty ((===) <$> facts bruteForce <*> facts cadical)
+    , testProperty "next names the fewest grades moving each root option's bounds" $
+        forAll (genSpace >>= genGraded) $ \space ->
+          forAll (genPoint space) $ \p ->
+            consistent p ==>
+              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
+                analyse solver (modelAt space p) "current" >>= \case
+                  StaleAt _ -> pure discard
+                  Fresh s -> do
+                    found <- leads solver (modelAt space p) "current" s (length (rootsOf space s))
+                    pure $
+                      map (\l -> (l.option, l.move, Set.size l.grading)) found === fewestGrades space p (rootsOf space s)
+                        .&&. conjoin (map (leadMoves space p) found)
     , testProperty "option views agree under brute force and CaDiCaL" $
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
@@ -181,6 +196,51 @@ properties =
     consequencesOf space p = let f = compile space in bruteForceOn f (\q -> consequences q p)
     holds v (Take _) = v === Just Forced
     holds v (Refuse _) = v === Just Impossible
+
+-- | Decide `next` from the prose: for each root option whose bounds
+-- leave out some grade, the fewest options without a verified grade that,
+-- graded the grade above `lo`, raise `lo`, and the fewest ungraded ones
+-- that, graded below `hi`, lower `hi`; the cheaper, raising on a tie.
+-- Each lead holds its option, move and how many it grades.
+fewestGrades :: Space -> Set Literal -> [OptionId] -> [(OptionId, Move, Int)]
+fewestGrades space p roots =
+  [ (o, move, n)
+  | o <- roots
+  , let b = bestDesigns space p Map.! o
+  , b.lo < b.hi
+  , (move, n) <- take 1 (sortOn snd (catMaybes [(,) (Raise (b.lo + 1)) <$> raising o b, (,) (Lower b.hi) <$> lowering o b]))
+  ]
+  where
+    options = [Listed x.id | q <- Map.elems space.questions, x <- q.options]
+    assessment o = Map.lookup o assessed
+    assessed = assessments space
+    raising o b =
+      fewest
+        [c | c <- options, maybe True (.unverified) (assessment c)]
+        (\cs -> (bestDesigns (gradedAt space (b.lo + 1) cs) p Map.! o).lo > b.lo)
+    lowering o b =
+      fewest
+        [c | c <- options, isNothing (assessment c)]
+        (\cs -> (bestDesigns (gradedAt space (b.hi - 1) cs) p Map.! o).hi < b.hi)
+    fewest cs moves = listToMaybe [length s | s <- sortOn length (subsequences cs), moves s]
+
+-- | Returns the possible listed options of root questions, by question and
+-- option.
+rootsOf :: Space -> Standing -> [OptionId]
+rootsOf space s =
+  [ o | q <- Map.elems space.questions, null q.raisedBy, o@(Listed _) <- choices q, Map.lookup o s.verdicts == Just Possible
+  ]
+
+assessments :: Space -> Map.Map OptionId Assessment
+assessments space = Map.fromList [(Listed o.id, a) | q <- Map.elems space.questions, o <- q.options, Just a <- [o.assessment]]
+
+-- | Holds when grading the lead's options as it says moves its bound.
+leadMoves :: Space -> Set Literal -> Lead -> Property
+leadMoves space p l = counterexample (show l) $ case l.move of
+  Raise g -> (regraded g).lo > l.bounds.lo
+  Lower g -> (regraded (g - 1)).hi < l.bounds.hi
+  where
+    regraded k = bestDesigns (gradedAt space k (Set.toList l.grading)) p Map.! l.option
 
 -- | Holds when every verdict of the second is no stronger than the first's.
 weakens :: Consequences -> Consequences -> Property
@@ -224,6 +284,6 @@ bestDesigns space p =
        in go seeds
     top = length space.grades - 1
     position g = length (takeWhile (/= g) space.grades)
-    assessed = Map.fromList [(Listed o.id, a) | q <- Map.elems space.questions, o <- q.options, Just a <- [o.assessment]]
+    assessed = assessments space
     low o = maybe 0 (\a -> if a.unverified then 0 else position a.grade) (Map.lookup o assessed)
     high o = maybe top (position . (.grade)) (Map.lookup o assessed)

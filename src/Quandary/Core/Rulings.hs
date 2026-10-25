@@ -212,9 +212,13 @@ resolveOption space = \t -> case writtenOption t of
   where
     at = optionAt space
 
+-- | Returns the option's assessment. Bind `assessmentOf space` once.
 assessmentOf :: Space -> OptionId -> Maybe Assessment
-assessmentOf _ (Other _) = Nothing
-assessmentOf space (Listed i) = optionAt space i >>= \(_, o) -> o.assessment
+assessmentOf space = assessment
+  where
+    at = optionAt space
+    assessment (Other _) = Nothing
+    assessment (Listed i) = at i >>= \(_, o) -> o.assessment
 
 -- | Returns the id before the first `.` and the text after it; Nothing for an invalid id.
 writtenOption :: Text -> Maybe (Id, Maybe Text)

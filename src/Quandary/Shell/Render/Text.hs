@@ -55,6 +55,7 @@ module Quandary.Shell.Render.Text
   , rowNotes
   , rankText
   , rankChunks
+  , leads
   , raisedTitle
   , coRaiserText
   , staleLines
@@ -82,6 +83,7 @@ import Data.Time (LocalTime, defaultTimeLocale, formatTime)
 import Quandary.Core.Analyse
 import Quandary.Core.Analyse qualified as Analyse
 import Quandary.Core.Compile (Constraint (..))
+import Quandary.Core.Next (Lead (..), Move (..))
 import Quandary.Core.Rulings
 import Quandary.Core.Source
 import Quandary.Core.Types
@@ -138,12 +140,16 @@ formatIssue (Yaml y) = case y of
   Tag -> "a tag: every value is text"
   DuplicateKey k -> "duplicate key " <> k
   ComplexKey -> "a key that is not text"
-formatIssue (UnknownKey k) = "unknown key " <> k
+formatIssue (UnknownKey k allowed) = unknownKey k allowed
+formatIssue (UnquotedComma k allowed) = unknownKey k allowed <> "; quote a value holding a comma inside {}"
 formatIssue (Expected s) =
   "expected " <> case s of
     TextShape -> "text"
     ListShape -> "a list"
     MappingShape -> "a mapping"
+
+unknownKey :: Text -> [Text] -> Text
+unknownKey k allowed = "unknown key " <> k <> " (expected " <> Text.intercalate ", " allowed <> ")"
 
 issue :: FilePath -> Issue -> Text
 issue _ (BadId t) = "bad id " <> t <> ": path segments are letters, digits, - and _"
@@ -308,6 +314,27 @@ closedWith _ [] = []
 closedWith end [x] = [x <> end]
 closedWith end (x : xs) = x : closedWith end xs
 
+-- | Returns each lead: its option with title, bounds and rank, which way
+-- grading moves them, then the options to grade with their titles.
+leads :: Space -> Map OptionId Rank -> [Lead] -> Text
+leads _ _ [] = "grading moves no root option's bounds\n"
+leads space ranks ls = Text.unlines (intercalate [""] (map lead ls))
+  where
+    lead l =
+      heading l
+        : ("  " <> plain (instruction l))
+        : map ("  " <>) (columns [[optionName o, title o] | o <- Set.toList l.grading])
+    heading l =
+      plain
+        (joined "  " [[Named l.option], wordsOf (title l.option), valueChunks space (Just l.bounds) (Map.lookup l.option ranks)])
+    instruction l = case l.move of
+      Raise g -> [Words "grade each ", gradeAt space g] ++ orBetter g ++ [Words " to raise lo:"]
+      Lower g -> [Words "grade each below ", gradeAt space g, Words " to lower hi:"]
+    title = fromMaybe "" . titleOf space
+    orBetter g
+      | g == topGrade space = []
+      | otherwise = [Words " or better"]
+
 -- | Returns the bounds by grade, one grade when they meet.
 boundsChunks :: Space -> Bounds -> [Chunk]
 boundsChunks space b
@@ -469,15 +496,13 @@ rowMark r = markText (mark r.ruling r.verdict)
 -- | Returns the option's title, bounds and rank, and its ruling's point
 -- and reason.
 rowDetail :: Space -> Text -> OptionRow -> [Chunk]
-rowDetail space name r = joined "  " [wordsOf (fromMaybe "" r.title), valueChunks space r, wordsOf note]
+rowDetail space name r = joined "  " [wordsOf (fromMaybe "" r.title), valueChunks space r.bounds r.rank, wordsOf note]
   where
     note = maybe "" (rulingNote name) r.ruling
 
 -- | Returns the option's bounds and rank.
-valueChunks :: Space -> OptionRow -> [Chunk]
-valueChunks space r = joined "  " [value, rankChunks r.rank]
-  where
-    value = maybe [] (\b -> Words "value " : boundsChunks space b) r.bounds
+valueChunks :: Space -> Maybe Bounds -> Maybe Rank -> [Chunk]
+valueChunks space b r = joined "  " [maybe [] (\bs -> Words "value " : boundsChunks space bs) b, rankChunks r]
 
 -- | Returns the ruling's reason, after the point it comes from unless that
 -- is the point given.
@@ -598,7 +623,7 @@ optionFacts :: Model -> OptionView -> [Text]
 optionFacts m v =
   maybe [] (pure . rulingSummary v.point) v.row.ruling
     ++ explainedLines (explained m v)
-    ++ lineOf (valueChunks m.space v.row)
+    ++ lineOf (valueChunks m.space v.row.bounds v.row.rank)
     ++ concatMap lineOf (rowNotes m.space v.row)
 
 -- | Returns the chunks as a line, none when there are none.

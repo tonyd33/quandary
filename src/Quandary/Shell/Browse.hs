@@ -55,7 +55,6 @@ import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Time (UTCTime)
 import Data.Void (Void, absurd)
 import Quandary.Core.Analyse
@@ -247,7 +246,10 @@ data Snapshot = Snapshot
   deriving (Eq)
 
 snapshot :: FilePath -> IO Snapshot
-snapshot dir = Snapshot <$> Files.readSpace dir <*> Files.lockTaken dir
+snapshot dir = do
+  loaded <- Files.readSpace dir
+  lockWritten <- Files.lockTaken dir
+  pure Snapshot {loaded, lockWritten}
 
 -- | Wait for an event past the count seen, then for 100ms without one,
 -- then reread the space, publishing it when it or its edit lock differs

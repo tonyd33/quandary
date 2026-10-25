@@ -1,7 +1,7 @@
 module Quandary.Shell.Cli (main) where
 
 import Control.Exception (IOException, catch)
-import Control.Monad (forM_, when)
+import Control.Monad (forM_)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
@@ -17,6 +17,7 @@ import Quandary.Shell.Command.Exhaust qualified as Exhaust
 import Quandary.Shell.Command.Graph qualified as Graph
 import Quandary.Shell.Command.Init qualified as Init
 import Quandary.Shell.Command.Links qualified as Links
+import Quandary.Shell.Command.Next qualified as Next
 import Quandary.Shell.Command.Point qualified as Point
 import Quandary.Shell.Command.Prefer qualified as Prefer
 import Quandary.Shell.Command.Reopen qualified as Reopen
@@ -113,6 +114,7 @@ dispatch :: Env -> Action -> IO ExitCode
 dispatch env Status = Status.run env
 dispatch env (Show q) = Show.run env q
 dispatch env (Why t) = Why.run env t
+dispatch env (Next n) = Next.run env n
 dispatch env (Whatif args) = Whatif.run env args
 dispatch env (Accept args) = Accept.run env args
 dispatch env (Defeat args) = Defeat.run env args

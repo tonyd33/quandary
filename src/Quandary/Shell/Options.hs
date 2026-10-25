@@ -43,6 +43,7 @@ data Action
   = Status
   | Show Text
   | Why Text
+  | Next Int
   | Whatif [Text]
   | Accept [Text]
   | Defeat [Text]
@@ -85,6 +86,10 @@ options =
           <> modelCommand "status" "The frontier, then closed, deferred and dormant questions, then the points" (pure Status)
           <> modelCommand "show" "A question's options, verdicts, rulings and raised questions" (Show <$> positional "QUESTION")
           <> modelCommand "why" "Every set of rulings that makes an option impossible or forced" (Why <$> positional "OPTION")
+          <> modelCommand
+            "next"
+            "The fewest options to grade that move the most preferred root options' bounds"
+            (Next <$> argument auto (metavar "N" <> value 1 <> help "How many root options, 1 by default"))
           <> modelCommand
             "whatif"
             "What would move if the rulings were applied, as accept|defeat|reopen ID... groups"

@@ -223,7 +223,7 @@ optionHtml m v = do
   markdown (optionDescription v)
   forM_ v.row.objections (div_ [class_ "raises"] . objectionHtml v.point)
   where
-    value = Render.valueChunks m.space v.row
+    value = Render.valueChunks m.space v.row.bounds v.row.rank
     notes = Render.rowNotes m.space v.row
 
 notesHtml :: Text -> [[Render.Chunk]] -> Html ()

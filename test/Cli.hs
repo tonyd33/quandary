@@ -28,7 +28,8 @@ cli =
           =<< Text.readFile (dir </> "questions/store/where.md")
         (code, out, _) <- quandary dir ["check"]
         code @?= ExitFailure 1
-        lines out @?= [dir </> "questions/store/where.md:4: unknown key rank"]
+        lines out
+          @?= [dir </> "questions/store/where.md:4: unknown key rank (expected title, pick, raised-by, options, forbid, links)"]
     , testCase "check reports a stale point" $ withCopy $ \dir -> do
         writeFile
           (dir </> "points/broken.md")
@@ -252,6 +253,25 @@ cli =
                   ]
               , ""
               )
+    , testCase "next lists the fewest grades moving each root option's bounds" $ withCopy $ \dir -> do
+        writeGraded dir
+        r <- quandary dir ["next", "3"]
+        r
+          @?= ( ExitSuccess
+              , unlines
+                  [ "extra/c  C  value broken..costly"
+                  , "  grade each hack or better to raise lo:"
+                  , "  extra/c  C"
+                  , ""
+                  , "sync/git  Git repo under the hood  value broken..clean"
+                  , "  grade each below clean to lower hi:"
+                  , "  sync/git  Git repo under the hood"
+                  ]
+              , ""
+              )
+    , testCase "next says when grading moves no root option's bounds" $ withCopy $ \dir -> do
+        r <- quandary dir ["next"]
+        r @?= (ExitSuccess, "grading moves no root option's bounds\n", "")
     , testCase "show on a possible option gives its question, body and the questions it raises" $ withCopy $ \dir -> do
         r <- quandary dir ["show", "sync/git"]
         r

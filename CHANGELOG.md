@@ -10,6 +10,7 @@
 
 ### New Features
 
+- Added `next [N]`. For each of the first `N` most preferred root options whose bounds can still move, it names the fewest ungraded options to grade: those that, graded above the option's lower bound, raise it, or those that, graded below its upper bound, lower it, whichever is fewer.
 - Added `lock REASON` and `unlock`, marking a space mid-edit. While the lock is live, every command writing points refuses with its reason and age unless given `--force`, read-only commands warn, and `browse` and `serve` show it above every page; `serve`'s record form refuses unless its override is checked. `unlock` runs `check` before releasing, and lists every ruling forced over the lock. The lock lapses 15 minutes after the later of its taking and the last edit to the space's questions, notes or `quandary.yaml`; until someone unlocks, commands and pages warn that the edit may be unfinished.
 - Added a `desc` and a `color` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name`, `desc` and `color`. `serve` shows a grade's `desc` on hover over its name, tints the name with its `color`, and stripes each box cell of an option assessed at it. A bare name still works.
 - Added search to `serve`, linked from every page, and to `browse` under `/`: questions and options whose ids or titles match the text as go-to does, then those whose descriptions, bodies or ruling reasons hold it, each with the line that matched.
@@ -21,6 +22,7 @@
 
 ### Improvements
 
+- `check` now lists the keys a mapping accepts beside an unknown key, and for a key left by an unquoted comma inside `{}`, such as `why: cheap, no machinery`, says to quote the value.
 - `show` now takes an option id and prints the option's question, its ruling, every set of rulings making it forced or impossible, its bounds, rank, grade and dominator, its description and the questions it raises. It previously refused with `is an option, not a question`.
 - `show` now prints each question an option raises once, with its title. Options that raise it together with that option go on a `with any of` line under it.
 - `whatif accept` now lists every question the accepted options raise, with the bounds of its possible options at the point the acceptance reaches.

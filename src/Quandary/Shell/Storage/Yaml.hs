@@ -1,6 +1,7 @@
 -- | YAML as a tree of text, every scalar kept as spelled.
 module Quandary.Shell.Storage.Yaml
   ( Yaml (..)
+  , Style (..)
   , YamlIssue (..)
   , parseYaml
   , lineOf
@@ -22,7 +23,11 @@ import Text.Libyaml qualified as Y
 data Yaml
   = Scalar Int Text
   | Sequence Int [Yaml]
-  | Mapping Int [(Int, Text, Yaml)]
+  | Mapping Int Style [(Int, Text, Yaml)]
+  deriving (Eq, Show)
+
+-- | Whether a mapping is written in braces or as indented lines.
+data Style = Block | Flow
   deriving (Eq, Show)
 
 data YamlIssue
@@ -37,7 +42,7 @@ data YamlIssue
 lineOf :: Yaml -> Int
 lineOf (Scalar l _) = l
 lineOf (Sequence l _) = l
-lineOf (Mapping l _) = l
+lineOf (Mapping l _ _) = l
 
 -- | Returns the document's tree, Nothing for an empty document, and the
 -- issues found with their lines.
@@ -84,16 +89,20 @@ node (e : rest) = case e.yamlEvent of
     properties tag anchor
     (ys, rest') <- items rest
     pure (Sequence l ys, rest')
-  Y.EventMappingStart tag _ anchor -> do
+  Y.EventMappingStart tag style anchor -> do
     properties tag anchor
     (kvs, rest') <- entries Set.empty rest
-    pure (Mapping l kvs, rest')
+    pure (Mapping l (styleOf style) kvs, rest')
   _ -> node rest
   where
     l = e.yamlStartMark.yamlLine + 1
     properties tag anchor = do
       when (tag /= Y.NoTag) (issue l Tag)
       forM_ anchor (const (issue l Anchor))
+
+styleOf :: Y.MappingStyle -> Style
+styleOf Y.FlowMapping = Flow
+styleOf _ = Block
 
 items :: [Y.MarkedEvent] -> Build ([Yaml], [Y.MarkedEvent])
 items (e : rest) | Y.EventSequenceEnd <- e.yamlEvent = pure ([], rest)

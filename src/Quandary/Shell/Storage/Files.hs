@@ -107,7 +107,8 @@ data FormatIssue
   | NoFrontmatter
   | UnclosedFrontmatter
   | Yaml YamlIssue
-  | UnknownKey Text
+  | UnknownKey Text [Text]
+  | UnquotedComma Text [Text]
   | Expected Shape
   deriving (Eq, Show)
 
@@ -208,7 +209,7 @@ readConfig root = do
     then pure ([], ConfigSource {grades = Nothing})
     else do
       (yamlIssues, yaml) <- parseYaml =<< ByteString.readFile path
-      let (issues, c) = config (fromMaybe (Mapping 1 []) yaml)
+      let (issues, c) = config (fromMaybe emptyMapping yaml)
       pure ([FileProblem (normalise path) (Just l) (Format i) | (l, i) <- [(l, Yaml i) | (l, i) <- yamlIssues] ++ issues], c)
   where
     path = pathOf root ConfigDoc
@@ -273,7 +274,7 @@ complain l i = ([(l, i)], ())
 readDocument ::
   Document -> (Document -> Yaml -> Body -> Text -> Decode a) -> ByteString.ByteString -> IO ([(Int, FormatIssue)], a)
 readDocument doc decode bytes = case decodeUtf8' bytes of
-  Left _ -> pure (decode doc (Mapping 1 []) emptyBody "" `with` [(1, NotUtf8)])
+  Left _ -> pure (decode doc emptyMapping emptyBody "" `with` [(1, NotUtf8)])
   Right content -> case Text.lines content of
     "---" : rest -> case break (== "---") rest of
       (front, _ : after) -> do
@@ -282,12 +283,12 @@ readDocument doc decode bytes = case decodeUtf8' bytes of
         (yamlIssues, yaml) <- parseYaml (encodeUtf8 (Text.unlines front))
         split <- parsedBody doc bodyLine body
         let shifted = [(l + 1, Yaml i) | (l, i) <- yamlIssues]
-            tree = shiftYaml 1 (fromMaybe (Mapping 1 []) yaml)
+            tree = shiftYaml 1 (fromMaybe emptyMapping yaml)
         pure (decode doc tree split body `with` shifted)
-      (_, []) -> pure (decode doc (Mapping 1 []) emptyBody "" `with` [(1, UnclosedFrontmatter)])
+      (_, []) -> pure (decode doc emptyMapping emptyBody "" `with` [(1, UnclosedFrontmatter)])
     _ -> do
       split <- parsedBody doc 1 content
-      pure (decode doc (Mapping 1 []) split content `with` [(1, NoFrontmatter)])
+      pure (decode doc emptyMapping split content `with` [(1, NoFrontmatter)])
   where
     (issues, a) `with` more = (more ++ issues, a)
     emptyBody = Body "" []
@@ -303,7 +304,7 @@ forced b = foldr (\s rest -> s.heading.value `seq` s.level `seq` rest) b b.secti
 shiftYaml :: Int -> Yaml -> Yaml
 shiftYaml n (Scalar l t) = Scalar (l + n) t
 shiftYaml n (Sequence l ys) = Sequence (l + n) (map (shiftYaml n) ys)
-shiftYaml n (Mapping l kvs) = Mapping (l + n) [(k + n, key, shiftYaml n v) | (k, key, v) <- kvs]
+shiftYaml n (Mapping l style kvs) = Mapping (l + n) style [(k + n, key, shiftYaml n v) | (k, key, v) <- kvs]
 
 -- | Split a body at its top-level headings of level one and two.
 bodyOf :: Document -> Int -> Text -> Body
@@ -331,10 +332,18 @@ bodyOf doc firstLine content =
 
 -- | The keys a mapping may hold, each with its value.
 fields :: [Text] -> Yaml -> Decode (Map Text Yaml)
-fields allowed (Mapping _ kvs) = do
-  forM_ kvs $ \(l, k, _) -> unless (k `elem` allowed) (complain l (UnknownKey k))
+fields allowed (Mapping _ style kvs) = do
+  forM_ kvs $ \(l, k, v) -> unless (k `elem` allowed) (complain l (keyIssue style k v allowed))
   pure (Map.fromList [(k, v) | (_, k, v) <- kvs, k `elem` allowed])
 fields _ y = Map.empty <$ complain (lineOf y) (Expected MappingShape)
+
+-- | Returns the issue for a key the mapping does not accept.
+keyIssue :: Style -> Text -> Yaml -> [Text] -> FormatIssue
+keyIssue Flow k (Scalar _ "") allowed = UnquotedComma k allowed
+keyIssue _ k _ allowed = UnknownKey k allowed
+
+emptyMapping :: Yaml
+emptyMapping = Mapping 1 Block []
 
 located :: Document -> Int -> a -> Located a
 located doc l = Located (Loc doc (Just l))
@@ -363,7 +372,7 @@ listField doc item k m = case Map.lookup k m of
 
 entriesOf :: Maybe Yaml -> Decode [(Int, Text, Yaml)]
 entriesOf Nothing = pure []
-entriesOf (Just (Mapping _ kvs)) = pure kvs
+entriesOf (Just (Mapping _ _ kvs)) = pure kvs
 entriesOf (Just y) = [] <$ complain (lineOf y) (Expected MappingShape)
 
 listOf :: Maybe Yaml -> Decode [Yaml]
@@ -426,7 +435,7 @@ forbidEntry doc y = do
 linksOf :: Document -> Map Text Yaml -> Decode [LinkSource]
 linksOf doc m = listOf (Map.lookup "links" m) >>= mapM link
   where
-    link (Mapping l kvs) = do
+    link (Mapping l _ kvs) = do
       rel <- traverse (text doc) (lookup3 "rel" kvs)
       to <- traverse (text doc) (lookup3 "to" kvs)
       extra <- forM [(k, v) | (_, k, v) <- kvs, k /= "rel", k /= "to"] $ \(k, v) -> do
@@ -611,11 +620,11 @@ recordOverride root OverrideLock done = Text.appendFile (forcedPath root) (Text.
 unlockEdit :: FilePath -> IO (LockState, [Text])
 unlockEdit root = withRulingLock root $ do
   held <- try @IOException (editLock root)
-  forced <- linesIfPresent (forcedPath root)
+  overridden <- linesIfPresent (forcedPath root)
   removePathForcibly (editLockPath root)
   removePathForcibly (forcedPath root)
   state <- either throwIO pure held
-  pure (state, forced)
+  pure (state, overridden)
 
 linesIfPresent :: FilePath -> IO [Text]
 linesIfPresent path = do

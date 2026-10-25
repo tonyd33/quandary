@@ -314,6 +314,8 @@ Option commits to itself, to options taking it forces where point doesn't, and t
 
 Each possible option has bounds `lo..hi`: value with every ungraded option, `<question>.other` included, counted at lowest grade, and at highest. Unverified grade counts toward `hi` only. Design at least `lo` exists whatever ungraded options turn out to be; none better than `hi`. Bounds that meet = one grade; grading more can't move them. Option whose `hi` below sibling's `lo` is dominated. `pick: any` question design may leave unanswered never lowers bound.
 
+Grading moves bounds. To raise `lo`: fewest options without verified grade that, each graded grade above `lo` or better, give design taking option whose every commitment graded at least that grade. To lower `hi`: fewest ungraded options that, each graded below `hi`, leave no design taking option whose every commitment graded at least `hi`. `<question>.other` takes no grade, so neither counts it; graded listed option gets past it.
+
 ## Commands
 
 `-C DIR` names space (default `.`), `--point NAME` the point (default `current`).
@@ -328,6 +330,7 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 | `show QUESTION` | options with verdicts, rulings, grades, bounds, whether one dominated; under each option, each question it raises, once, with title, and on line below, options raising it alongside: `with a`, `with any of a, (b with c)`; none when option raises it alone |
 | `show OPTION` | option's title with ruling or verdict; its question with state; its ruling, `accepted` or `defeated`, with point it comes from unless this one, and reason; when forced or impossible, every set of rulings `why` lists with its `through:` constraints, none when its own ruling is the only set; bounds and rank, grade, dominator, as in `show QUESTION`; description; each question it raises, with co-raisers |
 | `why OPTION` | every set of rulings making `OPTION` impossible or forced, each with `through:` and minimal set of constraints of space that with those rulings does so, as `serve` option page lists them |
+| `next [N]` | first `N` (default 1) possible options of root questions, by preference at point, whose bounds grading can move: each with title, bounds and rank, then cheaper of fewest options to grade raising `lo` and fewest lowering `hi`, raising on tie, each with title; or `grading moves no root option's bounds` |
 | `whatif VERB ID ... [VERB ID ...]` | changes if rulings applied, with every conflicting set of rulings if they leave point stale; unless stale, then `raises`: every question accepted options raise, with title and co-raisers as in `show`, `[dormant]` when live in no design reaching new point, else options as in `status` at new point; each verb `accept`, `defeat` or `reopen` followed by ids, no reasons |
 | `accept OPTION... [--] [REASON]` | accept each; refuses, writing nothing, if any would leave point stale |
 | `defeat OPTION... [--] REASON` | defeat each; refuses, writing nothing, if any would leave point stale |

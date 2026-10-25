@@ -5,6 +5,7 @@ module Quandary.Core.Analyse
   , Standing (..)
   , Moved (..)
   , Bounds (..)
+  , Var (..)
   , Implication (..)
   , Refusal (..)
   , analyse
@@ -16,7 +17,14 @@ module Quandary.Core.Analyse
   , dominance
   , implications
   , topGrade
+  , bounding
+  , chosenRulings
+  , heldFor
+  , takenOptions
+  , lowGrade
+  , highGrade
   , whyAll
+  , smallestHittingSet
   , causes
   , Cause (..)
   , explain
@@ -43,13 +51,13 @@ where
 
 import Control.Monad (filterM, foldM, forM)
 import Data.Foldable (toList)
-import Data.List (find, sortOn)
+import Data.List (find, minimumBy, sortOn)
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing, mapMaybe, maybeToList)
-import Data.Ord (Down (..))
+import Data.Ord (Down (..), comparing)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -203,9 +211,9 @@ bounding m name s = (formula, each)
                 held <-
                   backbone
                     query
-                    (Set.insert (Take (Chosen o)) chosenRulings)
+                    (Set.insert (Take (Chosen o)) rulings)
                     (Set.map (Take . Chosen) (Set.delete o (Set.difference relevant forced)))
-                let seeds = foldMap (\ls -> Set.fromList [p | Take (Chosen p) <- Set.toList ls]) held
+                let seeds = foldMap takenOptions held
                 best query refusals o (Set.insert o seeds) grade cap
               _ -> pure cap
         hi <- bound highs top
@@ -216,13 +224,8 @@ bounding m name s = (formula, each)
         highs = (high, reachingBelow highsBelow, refusedBelow query highsBelow)
         lows = (low, reachingBelow lowsBelow, refusedBelow query lowsBelow)
     top = topGrade m.space
-    positions = Map.fromList (zip (map (.name) m.space.grades) [0 ..])
-    at = optionAt m.space
-    assessed (Listed i) = at i >>= (\(_, o) -> o.assessment)
-    assessed (Other _) = Nothing
-    gradeOf a = positions Map.! a.grade.name
-    low o = maybe 0 (\a -> if a.unverified then 0 else gradeOf a) (assessed o)
-    high o = maybe top gradeOf (assessed o)
+    low = lowGrade m.space
+    high = highGrade m.space
     -- For each grade above the lowest, the options graded below it and the
     -- options whose commitments can reach one.
     reachingBelow = Map.map closure
@@ -236,25 +239,9 @@ bounding m name s = (formula, each)
               r
               (Set.fromList [c | q <- Map.elems m.space.questions, any (`Set.member` r) (choices q), g <- q.raisedBy, c <- toList g])
        in if r' == r then r else closure r'
-    f = compile m.space
-    options = Set.toList f.variables
-    chosenRulings = Set.map (fmap Chosen) (rulingsOf m.points name)
-    formula =
-      Formula
-        { variables = Set.fromList (concat [[Chosen o, Seed o, Committed o] | o <- options])
-        , forbidden =
-            Set.unions
-              [ Set.map (Set.map (fmap Chosen)) f.forbidden
-              , Set.fromList [Set.fromList [Take (Seed o), Refuse (Committed o)] | o <- options]
-              , Set.fromList
-                  [ Set.fromList ([Take (Chosen o), Take (Committed c), Refuse (Committed o)] ++ [Take (Chosen x) | x <- toList g])
-                  | q <- Map.elems m.space.questions
-                  , g <- q.raisedBy
-                  , c <- toList g
-                  , o <- choices q
-                  ]
-              ]
-        }
+    options = Set.toList (compile m.space).variables
+    rulings = chosenRulings m name
+    formula = boundingFormula m.space
     -- For each grade above the lowest, the signed literals refusing to
     -- commit to every option graded below it.
     refusedBelow query = traverse (encoded query . Set.map (Refuse . Committed))
@@ -263,9 +250,65 @@ bounding m name s = (formula, each)
       (Just hs, Just below) -> go hs below (minimum (cap : map grade (Set.toList seeds)))
       _ -> pure 0
       where
-        held = Set.union chosenRulings (Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)))
+        held = heldFor rulings o seeds
         go _ _ 0 = pure 0
         go hs below k = reachesSigned query (below Map.! k ++ hs) >>= \r -> if r then pure k else go hs below (k - 1)
+
+-- | Returns the rulings with the option taken and each seed seeded.
+heldFor :: Set (Lit Var) -> OptionId -> Set OptionId -> Set (Lit Var)
+heldFor rulings o seeds = Set.unions [rulings, Set.singleton (Take (Chosen o)), Set.map (Take . Seed) seeds]
+
+-- | Returns the options the literals take.
+takenOptions :: Set (Lit Var) -> Set OptionId
+takenOptions ls = Set.fromList [p | Take (Chosen p) <- Set.toList ls]
+
+-- | Returns the formula over designs and what each commits to: a seed is
+-- committed, and a committed raiser group commits each option taken in
+-- the question it raises.
+boundingFormula :: Space -> Formula Var
+boundingFormula space =
+  Formula
+    { variables = Set.fromList (concat [[Chosen o, Seed o, Committed o] | o <- options])
+    , forbidden =
+        Set.unions
+          [ Set.map (Set.map (fmap Chosen)) f.forbidden
+          , Set.fromList [Set.fromList [Take (Seed o), Refuse (Committed o)] | o <- options]
+          , Set.fromList
+              [ Set.fromList ([Take (Chosen o), Take (Committed c), Refuse (Committed o)] ++ [Take (Chosen x) | x <- toList g])
+              | q <- Map.elems space.questions
+              , g <- q.raisedBy
+              , c <- toList g
+              , o <- choices q
+              ]
+          ]
+    }
+  where
+    f = compile space
+    options = Set.toList f.variables
+
+-- | Returns the option's grade counting it at the lowest grade when it is
+-- ungraded or its grade unverified. Bind `lowGrade space` once.
+lowGrade :: Space -> OptionId -> Int
+lowGrade space = maybe 0 (\a -> if a.unverified then 0 else position a.grade) . assessmentOf space
+  where
+    position = gradePosition space
+
+-- | Returns the option's grade counting it at the highest grade when it is
+-- ungraded. Bind `highGrade space` once.
+highGrade :: Space -> OptionId -> Int
+highGrade space = maybe (topGrade space) (position . (.grade)) . assessmentOf space
+  where
+    position = gradePosition space
+
+gradePosition :: Space -> Grade -> Int
+gradePosition space = (positions Map.!) . (.name)
+  where
+    positions = Map.fromList (zip (map (.name) space.grades) [0 ..])
+
+-- | Returns the rulings of the named point over the bounding formula's
+-- variables.
+chosenRulings :: Model -> Text -> Set (Lit Var)
+chosenRulings m name = Set.map (fmap Chosen) (rulingsOf m.points name)
 
 -- | Returns each option whose upper bound is below a sibling's lower
 -- bound, with the sibling of highest lower bound, the most preferred among
@@ -320,6 +363,12 @@ conflicts query rulings ls = sortOn Set.size <$> go []
 
 allM :: (Foldable t, Monad m) => (a -> m Bool) -> t a -> m Bool
 allM p = foldr (\x rest -> p x >>= \ok -> if ok then rest else pure False) (pure True)
+
+-- | Returns a smallest set meeting every given set.
+--
+-- Preconditions: no given set is empty.
+smallestHittingSet :: Ord a => [Set a] -> Set a
+smallestHittingSet = minimumBy (comparing Set.size) . hittingSets
 
 -- | Returns the minimal sets that meet every given set.
 hittingSets :: Ord a => [Set a] -> [Set a]
@@ -723,9 +772,9 @@ adopt solver m name confirmation = case Map.lookup name m.points of
         StaleAt cores ->
           let x = pointNamed now.points n
               droppable l = Set.member (optionOf l) adopted && inheritedAt now.points n l
-              hits = hittingSets [Set.map optionOf (Set.filter droppable c) | c <- cores]
-           in pure $ case sortOn Set.size hits of
-                h : _
-                  | not (any (Set.null . Set.filter droppable) cores) ->
-                      (now {points = Map.insert n x {drop = Set.union x.drop h} now.points}, (n, Set.toList h) : ds)
-                _ -> (now, ds)
+              sets = [Set.map optionOf (Set.filter droppable c) | c <- cores]
+              h = smallestHittingSet sets
+           in pure $
+                if any Set.null sets
+                  then (now, ds)
+                  else (now {points = Map.insert n x {drop = Set.union x.drop h} now.points}, (n, Set.toList h) : ds)

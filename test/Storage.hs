@@ -68,7 +68,9 @@ formatProblems :: [TestTree]
 formatProblems =
   [ testCase "an unknown key" $
       problemsOf [question "q" ["title: Q", "pick: one", "rank: 3"] ["Q."]]
-        >>= (@?= [("questions/q.md", Just 4, Format (UnknownKey "rank"))])
+        >>= ( @?=
+                [("questions/q.md", Just 4, Format (UnknownKey "rank" ["title", "pick", "raised-by", "options", "forbid", "links"]))]
+            )
   , testCase "a duplicate key" $
       problemsOf [question "q" ["title: Q", "pick: one", "pick: any"] ["Q."]]
         >>= (@?= [("questions/q.md", Just 4, Format (Yaml (DuplicateKey "pick")))])
@@ -264,7 +266,14 @@ grades =
         >>= (@?= [("quandary.yaml", Just 2, Semantic EmptyDesc)])
   , testCase "an unknown key under a grade" $
       problemsOf [config ["grades:", "  - {name: low, colour: red}"]]
-        >>= (@?= [("quandary.yaml", Just 2, Format (UnknownKey "colour"))])
+        >>= (@?= [("quandary.yaml", Just 2, Format (UnknownKey "colour" ["name", "desc", "color"]))])
+  , testCase "an unquoted comma in a flow mapping's value" $
+      problemsOf
+        [config ["grades: [low, high]"], graded ["  a: {title: A, assessment: {grade: low, why: cheap, no machinery}}"]]
+        >>= (@?= [("questions/q.md", Just 5, Format (UnquotedComma "no machinery" ["grade", "unverified", "why"]))])
+  , testCase "an unknown key with a value in a flow mapping" $
+      problemsOf [config ["grades: [low, high]"], graded ["  a: {title: A, assessment: {grade: low, note: x}}"]]
+        >>= (@?= [("questions/q.md", Just 5, Format (UnknownKey "note" ["grade", "unverified", "why"]))])
   , testCase "a grade without a name" $
       problemsOf [config ["grades:", "  - desc: does not work"]]
         >>= (@?= [("quandary.yaml", Just 2, Semantic (Missing NameField))])
@@ -294,7 +303,7 @@ grades =
         >>= (@?= [("quandary.yaml", Just 1, Semantic (EmptyList GradesField))])
   , testCase "an unknown key in quandary.yaml" $
       problemsOf [config ["grades: [low]", "scale: 3"]]
-        >>= (@?= [("quandary.yaml", Just 2, Format (UnknownKey "scale"))])
+        >>= (@?= [("quandary.yaml", Just 2, Format (UnknownKey "scale" ["grades"]))])
   ]
   where
     config ls = ("quandary.yaml", Text.unlines ls)

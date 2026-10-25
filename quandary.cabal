@@ -40,6 +40,7 @@ library
   other-modules:   Paths_quandary
   exposed-modules:
     Quandary.Core.Analyse
+    Quandary.Core.Next
     Quandary.Core.Compile
     Quandary.Core.Order
     Quandary.Core.Rulings
@@ -61,6 +62,7 @@ library
     Quandary.Shell.Command.Exhaust
     Quandary.Shell.Command.Graph
     Quandary.Shell.Command.Init
+    Quandary.Shell.Command.Next
     Quandary.Shell.Command.Links
     Quandary.Shell.Command.Point
     Quandary.Shell.Command.Prefer

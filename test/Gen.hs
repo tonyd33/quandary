@@ -1,6 +1,7 @@
 module Gen
   ( genSpace
   , genGraded
+  , gradedAt
   , genPoint
   , generalize
   , specialize
@@ -35,6 +36,15 @@ genSpace = do
   where
     qid i = Text.pack ("q" <> show i)
     oid i j = Text.pack ("o" <> show i <> show j)
+
+-- | Returns the space with each given option graded, verified, at the
+-- grade in the position given.
+gradedAt :: Space -> Int -> [OptionId] -> Space
+gradedAt space k cs = space {questions = Map.map (\q -> q {options = map grade q.options}) space.questions}
+  where
+    grade o
+      | Listed o.id `elem` cs = o {assessment = Just (Assessment (space.grades !! k) False Nothing)}
+      | otherwise = o
 
 -- | Declare three grades and assess some options, a few unverified.
 genGraded :: Space -> Gen Space
