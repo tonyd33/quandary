@@ -221,7 +221,9 @@ pages =
         _ -> assertFailure "not a rulings page"
   , testCase "the rulings page offers to reopen a ruling" $ do
       rendered <- htmlAt (RulingsAt "current")
-      assertBool (Text.unpack rendered) ("<button name=\"reopen\" value=\"sync/lww\">reopen</button>" `Text.isInfixOf` rendered)
+      assertBool
+        (Text.unpack rendered)
+        ("<button name=\"reopen\" value=\"sync/lww\">reopen</button>" `Text.isInfixOf` rendered)
   , testCase "a question's id is no option" $
       pageAt (OptionAt "current" "sync/how") >>= \case
         NotFound t -> t @?= "unknown option sync/how"
