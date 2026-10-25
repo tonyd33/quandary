@@ -15,6 +15,7 @@ build-type:    Simple
 tested-with:   GHC == 9.10.3
 extra-doc-files: README.md
 extra-source-files:
+  web/vendor/**/*.js
   test/fixtures/**/*.md
   test/golden/*.txt
   test/golden/*.html
@@ -45,6 +46,7 @@ library
     Quandary.Core.Types
     Quandary.Core.Validate
     Quandary.Core.View
+    Quandary.Shell.Assets
     Quandary.Shell.Browse
     Quandary.Shell.Cli
     Quandary.Shell.Command.Accept
@@ -72,6 +74,7 @@ library
     Quandary.Shell.Fuzzy
     Quandary.Shell.Markdown
     Quandary.Shell.Options
+    Quandary.Shell.Render.Cytoscape
     Quandary.Shell.Render.Dot
     Quandary.Shell.Render.Graph
     Quandary.Shell.Render.Html
@@ -86,6 +89,7 @@ library
     Quandary.Shell.Storage.Files
     Quandary.Shell.Storage.Yaml
   build-depends:
+    , aeson
     , async
     , brick
     , bytestring
@@ -94,6 +98,7 @@ library
     , conduit
     , containers
     , directory
+    , file-embed
     , filepath
     , fsnotify
     , http-types

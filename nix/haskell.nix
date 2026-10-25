@@ -11,6 +11,7 @@ let
       ../src
       ../app
       ../test
+      ../web
     ];
   };
 in

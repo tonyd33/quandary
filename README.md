@@ -377,10 +377,11 @@ Order: question comes after questions of its raisers. Of questions that may come
 | `/p/POINT/q/QUESTION` | question, e.g. `/p/current/q/sync/how` |
 | `/p/POINT/o/OPTION` | option, e.g. `/p/current/o/sync/git`, `/p/current/o/sync/how.other` |
 | `/p/POINT/go?id=TEXT` | 303 to page of id best matching `TEXT`, as `g` in `browse`; not found when none matches |
+| `/p/POINT/graph` | graph: each question a box holding its options, coloured by verdict, edges for raising, `needs`, `needs-one-of` and `excludes`; questions start collapsed; click option to open its page, click question to expand or collapse it, double-click to open it |
 | `/points` | points |
 | `/p/POINT/whatif?accept=O&defeat=O&reopen=ID` | whatif, suppositions in query order, ids as `whatif` takes them |
 
-Every page links each option id or key to option's page, and has go-to box. Question page states raisers once, as links; each question raised under option folded to its `raises` line and option count until opened. Not found page answers 404. Each page reloads itself when space changes, through server-sent events on `/events?since=REVISION`. Server binds `127.0.0.1` only, answers 403 to `Host` other than `127.0.0.1:N` or `localhost:N`, and drops raw HTML from bodies.
+Every page links each option id or key to option's page, marks each question and option id with its kind, and has go-to box. Question and option pages link to graph centred on their node (`/p/POINT/graph#q:QUESTION`, `#o:OPTION`), expanding its question. Status group headings, verdicts, question states, rulings, bounds and ranks say what they mean on hover. Question page states raisers once, as links; each question raised under option folded to its `raises` line and option count until opened. Not found page answers 404. Each page reloads itself when space changes, through server-sent events on `/events?since=REVISION`. Server binds `127.0.0.1` only, answers 403 to `Host` other than `127.0.0.1:N` or `localhost:N`, and drops raw HTML and script-running links from bodies. Graph scripts (Cytoscape.js, cytoscape-dagre, cytoscape-expand-collapse, MIT) are served from the binary, never a CDN.
 
 ## License
 

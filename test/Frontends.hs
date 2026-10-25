@@ -158,6 +158,17 @@ html =
   [ goldenVsString "question page" "test/golden/question.html" $ do
       let r = QuestionAt "current" (Id "sync/how")
       renderBS . document r <$> drawnAt r
+  , testCase "the graph page holds each question and option, linked to its page" $ do
+      let r = GraphAt "current"
+      out <- LazyText.toStrict . renderText . document r <$> drawnAt r
+      assertBool "question node" ("\"id\":\"q:sync/how\"" `Text.isInfixOf` out)
+      assertBool "option node" ("\"href\":\"/p/current/o/sync/lww\"" `Text.isInfixOf` out)
+  , testCase "a title cannot close the graph's script" $ withCopy $ \dir -> do
+      let file = dir </> "questions/sync/how.md"
+      TextIO.readFile file
+        >>= TextIO.writeFile file . Text.replace "title: How devices sync" "title: How </script> devices sync"
+      out <- LazyText.toStrict . renderText . document (GraphAt "current") <$> withLive dir (`page` GraphAt "current")
+      assertBool (Text.unpack out) ("How \\u003c/script> devices sync" `Text.isInfixOf` out)
   , testCase "a body's raw HTML is dropped" $ do
       let out =
             LazyText.toStrict

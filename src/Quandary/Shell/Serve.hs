@@ -16,6 +16,7 @@ import Lucid (Html, renderBS)
 import Network.HTTP.Types
 import Network.Wai
 import Quandary.Core.Types
+import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
 import Quandary.Shell.Render.Html (document, link)
 import Quandary.Shell.Resolve (Verb, verbNamed)
@@ -26,6 +27,7 @@ app live point port req respond
       respond (plain status403 "refused: the Host header is not this server's\n")
   | requestMethod req /= methodGet = respond (plain status405 "only GET\n")
   | pathInfo req == ["events"] = respond (events live (since (queryString req)))
+  | ["assets", name] <- pathInfo req = respond (maybe (plain status404 "not found\n") script (Assets.asset name))
   | otherwise = case route point (pathInfo req) (queryString req) of
       Nothing -> respond (plain status404 "not found\n")
       Just r -> do
@@ -37,6 +39,11 @@ responseOf r d = case d.shown of
   Shown _ (NotFound _) -> html status404 [] (document r d)
   Shown _ (Redirect to) -> html status303 [(hLocation, encodeUtf8 (link to))] (document r d)
   _ -> html status200 [] (document r d)
+
+script :: ByteString -> Response
+script =
+  responseLBS status200 [(hContentType, "text/javascript; charset=utf-8"), (hCacheControl, "max-age=86400")]
+    . Lazy.fromStrict
 
 plain :: Status -> ByteString -> Response
 plain s t = responseLBS s [(hContentType, "text/plain; charset=utf-8")] (Lazy.fromStrict t)
@@ -74,6 +81,7 @@ route _ ["p", p] _ = Just (StatusAt p)
 route _ ("p" : p : "q" : i@(_ : _)) _ = Just (QuestionAt p (Id (Text.intercalate "/" i)))
 route _ ("p" : p : "o" : i@(_ : _)) _ = Just (OptionAt p (Text.intercalate "/" i))
 route _ ["p", p, "whatif"] q = WhatifAt p <$> traverse supposition q
+route _ ["p", p, "graph"] _ = Just (GraphAt p)
 route _ ["p", p, "go"] q = GoTo p <$> (join (lookup "id" q) >>= decoded)
 route _ _ _ = Nothing
 

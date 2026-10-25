@@ -57,6 +57,7 @@ import Quandary.Core.Validate
 import Quandary.Core.View
 import Quandary.Core.View qualified as View
 import Quandary.Shell.Fuzzy qualified as Fuzzy
+import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Resolve (Verb)
 import Quandary.Shell.Resolve qualified as Resolve
 import Quandary.Shell.Solver.Cadical (cadical)
@@ -73,6 +74,7 @@ data Route
   | Points
   | WhatifAt Text [(Verb, Text)]
   | GoTo Text Text
+  | GraphAt Text
   deriving (Eq, Ord, Show)
 
 -- | Returns the point the route is at, `current` for the points.
@@ -83,6 +85,7 @@ routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
 routePoint (WhatifAt p _) = p
 routePoint (GoTo p _) = p
+routePoint (GraphAt p) = p
 
 routeTitle :: Route -> Text
 routeTitle (StatusAt p) = "point " <> p
@@ -91,6 +94,7 @@ routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
 routeTitle (WhatifAt p _) = "whatif at " <> p
 routeTitle (GoTo p t) = "go to " <> t <> " at " <> p
+routeTitle (GraphAt p) = "graph at " <> p
 
 data Page
   = StatusPage Text Analysis (Map OptionId Bounds) (Set Text)
@@ -98,6 +102,7 @@ data Page
   | OptionPage OptionView
   | PointsPage [PointView]
   | WhatifPage Text [Supposition] (Either EditError Whatif)
+  | GraphPage Text Graph.Graph
   | -- | The page the route names.
     Redirect Route
   | NotFound Text
@@ -236,6 +241,9 @@ build b (OptionAt p t) = atPoint b.model p $ case Resolve.optionWithQuestion b.m
 build b (GoTo p t) = atPoint b.model p . pure $ case targets b.model.space of
   ts | (_, target) : _ <- Fuzzy.ranked t ts -> Redirect (targetRoute p target)
   _ -> NotFound ("no id matches " <> t)
+build b (GraphAt p) = atPoint b.model p $ do
+  a <- analysisAt b p
+  pure (GraphPage p (Graph.build b.model.space ((.verdicts) <$> standing a)))
 build b Points = PointsPage . View.pointViews b.model <$> staleNames b
 build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
   Left t -> pure (NotFound ("unknown id " <> t))

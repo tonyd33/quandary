@@ -127,6 +127,7 @@ pageWidget f d = case d.shown of
     OptionPage v -> optionWidget f m v
     Redirect r -> framed "go to" (padRight Max (padLeftRight 1 (txtWrap (Browse.routeTitle r))))
     PointsPage ps -> body "points" BodyView (pointsWidget ps)
+    GraphPage _ _ -> framed "graph" (padRight Max (padLeftRight 1 (txtWrap "serve draws the graph")))
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
     NotFound t -> framed "not found" (padRight Max (padLeftRight 1 (txtWrap t)))
   where
