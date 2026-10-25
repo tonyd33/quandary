@@ -3,6 +3,7 @@ module Quandary.Shell.Render.Cytoscape
   , explanation
   , questionKey
   , optionKey
+  , relationClass
   )
 where
 

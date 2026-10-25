@@ -10,17 +10,21 @@ module Quandary.Shell.Render.Graph
   , build
   , shown
   , raise
+  , edgesOf
   , forbidLabel
   , colours
   )
 where
 
 import Data.Foldable (toList)
+import Data.List (sortOn)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Quandary.Core.Analyse (QuestionState, Standing (..))
+import Quandary.Core.Compile qualified as Compile
 import Quandary.Core.Types
 import Quandary.Core.View (Dead, hidesOption, hidesQuestion)
 
@@ -51,6 +55,7 @@ data Edge = Edge
   }
 
 data Relation = Needs | NeedsOneOf | Excludes
+  deriving (Eq, Ord)
 
 data Raise
   = RaisedBy OptionId
@@ -70,36 +75,36 @@ data Colours = Colours
 build :: Space -> Maybe Standing -> Graph
 build space standing =
   Graph
-    { questions = map (questionNode standing) qs
+    { questions = map (questionNode standing edges) qs
     , forbids = map forbidNode (concatMap (.forbid) qs)
     }
   where
     qs = Map.elems space.questions
+    edges =
+      Map.map
+        (sortOn (.relation))
+        (Map.fromListWith (flip (++)) [(o, [e]) | (c, _) <- Compile.constraints space, (o, e) <- edgesOf c])
 
-questionNode :: Maybe Standing -> Question -> QuestionNode
-questionNode standing q =
+-- | Returns the edges the constraint draws, each with the option it leaves.
+edgesOf :: Compile.Constraint -> [(OptionId, Edge)]
+edgesOf (Compile.Needs o p) = [(o, Edge Needs p)]
+edgesOf (Compile.NeedsOneOf o ps) = [(o, Edge NeedsOneOf p) | p <- toList ps]
+edgesOf (Compile.Excludes o p) = [(o, Edge Excludes p)]
+edgesOf _ = []
+
+questionNode :: Maybe Standing -> Map OptionId [Edge] -> Question -> QuestionNode
+questionNode standing edges q =
   QuestionNode
     { id = q.id
     , label = idText q.id <> ": " <> q.title
     , state = Map.lookup q.id . (.states) =<< standing
-    , options = map (listedNode verdictOf) q.options ++ [otherNode]
+    , options =
+        [node (Listed o.id) (idText o.id <> ": " <> o.title) | o <- q.options] ++ [node (Other q.id) (optionName (Other q.id))]
     , raises = map raise q.raisedBy
     }
   where
     verdictOf o = Map.lookup o . (.verdicts) =<< standing
-    otherNode = OptionNode (Other q.id) (optionName (Other q.id)) (verdictOf (Other q.id)) []
-
-listedNode :: (OptionId -> Maybe Verdict) -> Option -> OptionNode
-listedNode verdictOf o =
-  OptionNode
-    { id = Listed o.id
-    , label = idText o.id <> ": " <> o.title
-    , verdict = verdictOf (Listed o.id)
-    , edges =
-        map (Edge Needs) o.needs
-          ++ map (Edge NeedsOneOf) (maybe [] toList o.needsOneOf)
-          ++ map (Edge Excludes) o.excludes
-    }
+    node o label = OptionNode o label (verdictOf o) (Map.findWithDefault [] o edges)
 
 -- | Returns the graph with the questions and options the view shows,
 -- dropping each raise and edge from or to an option left out.

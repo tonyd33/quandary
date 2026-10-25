@@ -44,13 +44,16 @@ run o = case o.command of
   Check -> do
     (loaded, v) <- validated
     Check.run o.dir (Files.problemsOf o.dir loaded v) v.model
-  OnModel action -> do
+  OnModel action -> lockedFor action $ do
     (loaded, v) <- validated
     forM_ (Files.problemsOf o.dir loaded v) (Text.hPutStrLn stderr . Render.problem o.dir)
     case Files.usableModel loaded v of
       Just m -> dispatch (Env o.dir o.point m) action
       Nothing -> failWith "the space has problems; nothing done"
   where
+    lockedFor action
+      | Options.writes action = Files.withRulingLock o.dir
+      | otherwise = id
     validated = do
       loaded <- Files.readSpace o.dir
       pure (loaded, validate loaded.sources)

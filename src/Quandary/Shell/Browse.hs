@@ -1,6 +1,9 @@
 module Quandary.Shell.Browse
   ( Route (..)
   , Page (..)
+  , Box (..)
+  , Play (..)
+  , NotRecorded (..)
   , Revision (..)
   , Drawn (..)
   , Shown (..)
@@ -25,6 +28,7 @@ module Quandary.Shell.Browse
   , Target (..)
   , targetRoute
   , goToRoute
+  , record
   , goToMatches
   , clampIndex
   , listedQuestions
@@ -40,7 +44,10 @@ import Control.Concurrent.Async (race)
 import Control.Concurrent.STM
 import Control.Exception (IOException, try)
 import Control.Monad (forM_, void, when)
+import Data.Bifunctor qualified as Bifunctor
 import Data.List (find)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, listToMaybe)
@@ -49,7 +56,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Void (Void, absurd)
 import Quandary.Core.Analyse
-import Quandary.Core.Rulings (EditError)
+import Quandary.Core.Analyse qualified as Analyse
+import Quandary.Core.Rulings (Edit (..), EditError, PointEdit (..))
 import Quandary.Core.Rulings qualified as Rulings
 import Quandary.Core.Source (Document (..))
 import Quandary.Core.Types
@@ -61,6 +69,7 @@ import Quandary.Shell.Markdown qualified as Markdown
 import Quandary.Shell.Render.Graph qualified as Graph
 import Quandary.Shell.Resolve (Verb)
 import Quandary.Shell.Resolve qualified as Resolve
+import Quandary.Shell.Rule qualified as Rule
 import Quandary.Shell.Solver.Cadical (cadical)
 import Quandary.Shell.Storage.Files (FileProblem (..))
 import Quandary.Shell.Storage.Files qualified as Files
@@ -75,7 +84,10 @@ data Route
   | Points
   | WhatifAt Text [(Verb, Text)]
   | GraphAt Text Dead
-  | BoxAt Text Dead
+  | -- | Played when it holds suppositions, even none.
+    BoxAt Text Dead (Maybe [(Verb, Text)])
+  | -- | The form recording the suppositions as rulings.
+    RecordAt Text [(Verb, Text)]
   deriving (Eq, Ord, Show)
 
 -- | Returns the point the route is at, `current` for the points.
@@ -86,7 +98,8 @@ routePoint (OptionAt p _) = p
 routePoint Points = Rulings.current
 routePoint (WhatifAt p _) = p
 routePoint (GraphAt p _) = p
-routePoint (BoxAt p _) = p
+routePoint (BoxAt p _ _) = p
+routePoint (RecordAt p _) = p
 
 routeTitle :: Route -> Text
 routeTitle (StatusAt p) = "point " <> p
@@ -95,7 +108,9 @@ routeTitle (OptionAt p o) = o <> " at " <> p
 routeTitle Points = "points"
 routeTitle (WhatifAt p _) = "whatif at " <> p
 routeTitle (GraphAt p _) = "graph at " <> p
-routeTitle (BoxAt p _) = "box at " <> p
+routeTitle (BoxAt p _ Nothing) = "box at " <> p
+routeTitle (BoxAt p _ (Just _)) = "playing at " <> p
+routeTitle (RecordAt p _) = "record at " <> p
 
 data Page
   = StatusPage Text Analysis (Map OptionId Bounds) (Set Text)
@@ -104,8 +119,40 @@ data Page
   | PointsPage [PointView]
   | WhatifPage Text [Supposition] (Either EditError Whatif)
   | GraphPage Text Dead Graph.Graph
-  | BoxPage Text Dead Analysis
+  | BoxPage Box
+  | RecordPage Text [(Verb, Text)]
+  | -- | What recording the suppositions moved, or why nothing was written.
+    RecordedPage Text [(Verb, Text)] (Either NotRecorded [Step])
   | NotFound Text
+
+-- | The box at a point, with the suppositions played on it.
+data Box = Box
+  { point :: Text
+  , dead :: Dead
+  , play :: Maybe Play
+  , model :: Model
+  -- ^ The model drawn, with the suppositions it draws.
+  , analysis :: Analysis
+  }
+
+data Play = Play
+  { supposed :: [(Verb, Text)]
+  , drawn :: Int
+  -- ^ How many of them the box draws: all, or the most that reach a design.
+  , conflict :: [Set Literal]
+  -- ^ Each set of rulings reaching no design, when all of them reach none.
+  , before :: Maybe Analysis
+  -- ^ The analysis before the last supposition drawn.
+  }
+
+-- | Why recording suppositions wrote nothing.
+data NotRecorded
+  = -- | The space changed since the form was drawn.
+    SpaceChanged
+  | UnknownId Text
+  | -- | A defeat of the id has no reason.
+    NoReason Text
+  | RulingRefused Model Refusal
 
 newtype Revision = Revision Int
   deriving (Eq, Ord, Show)
@@ -129,11 +176,13 @@ data Live = Live
 data Memo = Memo
   { pages :: Map Route Page
   , analyses :: Map Text Analysis
+  , played :: Map (Text, [(Verb, Text)]) Analysis
+  -- ^ The analysis at each point under each list of suppositions played.
   , staleNames :: Maybe (Set Text)
   }
 
 emptyMemo :: Memo
-emptyMemo = Memo Map.empty Map.empty Nothing
+emptyMemo = Memo Map.empty Map.empty Map.empty Nothing
 
 -- | Run the continuation on the space, reread whenever its files change.
 withLive :: FilePath -> (Live -> IO a) -> IO a
@@ -215,6 +264,7 @@ page live r = do
 memoisable :: Route -> Page -> Bool
 memoisable _ (NotFound _) = False
 memoisable (WhatifAt _ _) _ = False
+memoisable (BoxAt _ _ (Just _)) _ = False
 memoisable _ _ = True
 
 -- | A model being drawn at a revision of the space.
@@ -241,11 +291,47 @@ build b (OptionAt p t) = atPoint b.model p $ case Resolve.optionWithQuestion b.m
 build b (GraphAt p dead) = atPoint b.model p $ do
   a <- analysisAt b p
   pure (GraphPage p dead (Graph.shown dead (Graph.build b.model.space (standing a))))
-build b (BoxAt p dead) = atPoint b.model p (BoxPage p dead <$> analysisAt b p)
+build b (BoxAt p dead Nothing) = atPoint b.model p (BoxPage . Box p dead Nothing b.model <$> analysisAt b p)
+build b (BoxAt p dead (Just ws)) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
+  Left t -> pure (NotFound ("unknown id " <> t))
+  Right ss -> case Analyse.supposeEach b.model p ss of
+    Left _ -> pure (NotFound "a supposition does not apply at the point")
+    Right models -> BoxPage <$> playedBox b p dead ws models
+build b (RecordAt p ws) = atPoint b.model p (pure (RecordPage p ws))
 build b Points = PointsPage . View.pointViews b.model <$> staleNames b
 build b (WhatifAt p ws) = atPoint b.model p $ case traverse (supposed b.model.space) ws of
   Left t -> pure (NotFound ("unknown id " <> t))
   Right ss -> WhatifPage p ss <$> View.whatifFacts cadical b.model p ss
+
+-- | Returns the box drawing the most of the suppositions that reach a
+-- design, given the model under each prefix of them, none first.
+playedBox :: Building -> Text -> Dead -> [(Verb, Text)] -> NonEmpty Model -> IO Box
+playedBox b p dead ws models = do
+  full <- playedAt longest
+  ((prefix, m), a, rest) <- lastReaching longest full shorter
+  before <- traverse playedAt (listToMaybe rest)
+  pure
+    Box
+      { point = p
+      , dead
+      , play = Just (Play ws (length prefix) (conflictOf full) before)
+      , model = m
+      , analysis = a
+      }
+  where
+    longest :| shorter = NonEmpty.reverse (NonEmpty.zip (NonEmpty.inits ws) models)
+    playedAt ([], _) = analysisAt b p
+    playedAt (prefix, m) =
+      memoised
+        b.live
+        b.revision
+        (Map.lookup (p, prefix) . (.played))
+        (\a memo -> memo {played = Map.insert (p, prefix) a memo.played})
+        (analyse cadical m p)
+    lastReaching _ (StaleAt _) (next : more) = playedAt next >>= \a -> lastReaching next a more
+    lastReaching here a more = pure (here, a, more)
+    conflictOf (StaleAt cores) = cores
+    conflictOf (Fresh _) = []
 
 atPoint :: Model -> Text -> IO Page -> IO Page
 atPoint m p k
@@ -403,6 +489,38 @@ pageOptions expanded d = case d.shown of
     below o obs
       | Set.member o expanded = raised obs
       | otherwise = []
+
+-- | Record the suppositions as rulings at the point, each with its reason,
+-- holding the ruling lock. Refuse, writing nothing, when the space changed
+-- since the revision a page was drawn at, when a defeat has no reason, or
+-- when they would leave the point stale.
+record :: Live -> Text -> Revision -> [(Verb, Text, Text)] -> IO Drawn
+record live p drawnAt rs = Files.withRulingLock live.dir $ do
+  (now, u) <- readTVarIO live.loaded
+  disk <- usability live.dir <$> Files.readSpace live.dir
+  Drawn now <$> case u of
+    Unusable ps -> pure (Problems ps)
+    Usable m
+      | not (hasPoint m p) -> pure (Shown m (NotFound ("unknown point " <> p)))
+      | now /= drawnAt || not (sameModel m disk) -> pure (recorded m (Left SpaceChanged))
+      | otherwise -> case traverse (recordedEdit m.space) rs of
+          Left e -> pure (recorded m (Left e))
+          Right es -> recorded m . Bifunctor.first (uncurry RulingRefused) <$> Rule.ruled live.dir m p es
+  where
+    recorded m = Shown m . RecordedPage p [(v, t) | (v, t, _) <- rs]
+
+sameModel :: Model -> Usability -> Bool
+sameModel m (Usable m') = m == m'
+sameModel _ (Unusable _) = False
+
+-- | Returns the edit recording a supposition with its reason.
+recordedEdit :: Space -> (Verb, Text, Text) -> Either NotRecorded Edit
+recordedEdit space (v, t, r) = case (Resolve.supposing space v t, parseReason r) of
+  (Nothing, _) -> Left (UnknownId t)
+  (Just (Suppose (Take o)), reason) -> Right (Rule (Accept o reason))
+  (Just (Suppose (Refuse o)), Just reason) -> Right (Rule (Defeat o reason))
+  (Just (Suppose (Refuse _)), Nothing) -> Left (NoReason t)
+  (Just (Apply e), _) -> Right (Rule e)
 
 -- | What going to an id opens.
 data Target = ToQuestion Id | ToOption OptionId

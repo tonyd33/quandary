@@ -129,12 +129,15 @@ pageWidget f parsed d = case d.shown of
     QuestionPage v -> questionWidget f parsed m.space v
     OptionPage v -> optionWidget f parsed m v
     PointsPage ps -> body "points" BodyView (pointsWidget ps)
-    GraphPage {} -> framed "graph" (padRight Max (padLeftRight 1 (txtWrap "serve draws the graph")))
-    BoxPage {} -> framed "box" (padRight Max (padLeftRight 1 (txtWrap "serve draws the box")))
+    GraphPage {} -> note "graph" "serve draws the graph"
+    BoxPage {} -> note "box" "serve draws the box"
+    RecordPage {} -> note "record" "serve records from the box"
+    RecordedPage {} -> note "record" "serve records from the box"
     WhatifPage p _ r -> body ("whatif at " <> p) WhatifView (wrappedLines (either pure id (Render.whatifResult p r)))
-    NotFound t -> framed "not found" (padRight Max (padLeftRight 1 (txtWrap t)))
+    NotFound t -> note "not found" t
   where
     body label n = framedIf (f.pane /= Questions) label . scrolled n . padLeftRight 1
+    note label t = framed label (padRight Max (padLeftRight 1 (txtWrap t)))
 
 framed :: Text -> Widget Name -> Widget Name
 framed label = borderWithLabel (txt (padded label))

@@ -1,11 +1,12 @@
 module Cli (cli) where
 
-import Data.List (isInfixOf, isPrefixOf)
+import Control.Concurrent.Async (forConcurrently)
+import Data.List (isInfixOf, isPrefixOf, sort)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Fixtures (withCopy)
-import System.Directory (createDirectoryIfMissing, removeFile)
+import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (readFile')
@@ -240,12 +241,15 @@ cli =
     , testCase "show on a defeated option impossible for another cause gives every set of rulings" $ withCopy $ \dir -> do
         _ <- quandary dir ["defeat", "sync/crdt", "--", "too", "complex"]
         (_, out, _) <- quandary dir ["show", "sync/crdt"]
-        take 7 (lines out)
+        take 10 (lines out)
           @?= [ "sync/crdt: CRDT per note [defeated]"
               , "in sync/how: How devices sync [open]"
               , "defeated: too complex"
               , "impossible because of:"
               , "  accept store/files (current: must open in any editor)"
+              , "  through:"
+              , "    sync/crdt needs store/sqlite"
+              , "    store/where takes at most one option"
               , "and because of:"
               , "  defeat sync/crdt (current: too complex)"
               ]
@@ -506,6 +510,16 @@ cli =
     , testCase "whatif defeat names its supposed ruling without a reason" $ withCopy $ \dir -> do
         (_, out, _) <- quandary dir ["whatif", "defeat", "store/files"]
         assertBool out ("  defeat store/files (current)" `elem` lines out)
+    , testCase "rulings run at once each land in the point" $ withCopy $ \dir -> do
+        let defeated = ["conflict/copy", "conflict/silent", "conflict/two-way", "conflict/stacked", "conflict/swipe", "conflict/modal"]
+        results <- forConcurrently defeated $ \o -> quandary dir ["defeat", o, "--", "not now"]
+        [code | (code, _, _) <- results] @?= map (const ExitSuccess) defeated
+        written <- readFile' (dir </> "points/current.md")
+        sequence_ [assertBool (o <> " in\n" <> written) (("  " <> o <> ":") `isInfixOf` written) | o <- defeated]
+    , testCase "a ruling leaves no temporary file beside the point" $ withCopy $ \dir -> do
+        _ <- quandary dir ["defeat", "conflict/copy", "--", "not now"]
+        files <- listDirectory (dir </> "points")
+        sort files @?= ["current.md", "edit-offline.md"]
     , testCase "a usage error" $ withCopy $ \dir -> do
         (code, _, err) <- quandary dir ["frobnicate"]
         code @?= ExitFailure 1

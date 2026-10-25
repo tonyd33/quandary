@@ -269,9 +269,9 @@ rendering =
   , golden "show" $ \m -> do
       a <- analyse cadical m "current"
       pure (Render.showQuestion m.space (questionViewFrom m "current" a Map.empty (m.space.questions Map.! Id "sync/how")))
-  , golden "why" $ \m ->
-      Render.why m "current" (listed "sync/crdt") Impossible
-        <$> whyAll cadical m.space (rulingsOf m.points "current") (Take (listed "sync/crdt"))
+  , golden "why" $ \m -> do
+      cores <- whyAll cadical m.space (rulingsOf m.points "current") (Take (listed "sync/crdt"))
+      Render.why m "current" (listed "sync/crdt") Impossible <$> explain cadical m.space (listed "sync/crdt") Impossible cores
   , golden "graph" $ \m -> Mermaid.graph <$> spaceGraph m
   , golden "graph-dot" $ \m -> Dot.graph <$> spaceGraph m
   , testCase "dot joins options raising together and draws forbid entries" $ do

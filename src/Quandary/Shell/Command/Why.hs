@@ -17,5 +17,6 @@ run env t = Resolve.withOption env.model.space t $ \opt ->
   withFresh env env.point $ \s -> do
     let verdict = s.verdicts Map.! opt
     cores <- Analyse.causes Cadical.cadical env.model env.point opt verdict
-    Text.putStr (Render.why env.model env.point opt verdict cores)
+    causes <- Analyse.explain Cadical.cadical env.model.space opt verdict cores
+    Text.putStr (Render.why env.model env.point opt verdict causes)
     pure ExitSuccess

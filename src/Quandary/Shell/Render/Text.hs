@@ -13,9 +13,6 @@ module Quandary.Shell.Render.Text
   , why
   , Chunk (..)
   , plain
-  , Because (..)
-  , RulingSet (..)
-  , optionCauses
   , Explained (..)
   , explained
   , raisersChunks
@@ -55,6 +52,7 @@ module Quandary.Shell.Render.Text
   , raisedTitle
   , coRaiserText
   , staleLines
+  , rulingChunks
   , groupTitle
   , entryDetail
   , pointNote
@@ -553,7 +551,7 @@ optionTitle v = optionName v.row.option <> maybe "" (": " <>) v.row.title <> sta
 optionFacts :: Model -> OptionView -> [Text]
 optionFacts m v =
   maybe [] (pure . rulingSummary v.point) v.row.ruling
-    ++ maybe [] becauseLines (optionCauses m v)
+    ++ explainedLines (explained m v)
     ++ lineOf (valueChunks m.space v.row)
     ++ concatMap lineOf (rowNotes m.space v.row)
 
@@ -561,13 +559,6 @@ optionFacts m v =
 lineOf :: [Chunk] -> [Text]
 lineOf [] = []
 lineOf cs = [plain cs]
-
--- | Returns why the option is forced or impossible, unless its own ruling
--- is the only cause.
-optionCauses :: Model -> OptionView -> Maybe Because
-optionCauses m v = case v.row.verdict of
-  Just verdict | not (null v.causes) -> Just (because m v.point (verdictText verdict) verdict v.row.option (map (.rulings) v.causes))
-  _ -> Nothing
 
 -- | Returns the ruling's verb, the point it comes from unless that is the
 -- point given, and its reason.
@@ -598,31 +589,15 @@ pickText One = "one"
 pickText Some = "some"
 pickText Any = "any"
 
-why :: Model -> Text -> OptionId -> Verdict -> [Set Literal] -> Text
-why m name o v cores = case v of
-  Possible -> optionName o <> " is possible\n"
-  _ -> Text.unlines (becauseLines (because m name (optionName o <> " is " <> verdictText v) v o cores))
-
--- | Why an option has its verdict.
-data Because
-  = -- | No valid design gives it another, whatever the rulings.
-    Regardless [Chunk]
-  | -- | Each set of rulings giving it the verdict.
-    Sets [RulingSet]
+why :: Model -> Text -> OptionId -> Verdict -> [Cause] -> Text
+why _ _ o Possible _ = optionName o <> " is possible\n"
+why m name o v cs = Text.unlines (explainedLines (explainedAt m name o v (optionName o <> " is " <> verdictText v) cs))
 
 -- | A set of rulings, each a line, under its heading.
 data RulingSet = RulingSet
   { heading :: Text
   , rulings :: [[Chunk]]
   }
-
--- | Returns which sets of rulings give the option its verdict, under the
--- given opening.
-because :: Model -> Text -> Text -> Verdict -> OptionId -> [Set Literal] -> Because
-because _ _ opening _ _ [] = Sets [RulingSet opening []]
-because m name opening v o cores
-  | any Set.null cores = Regardless (regardless v o)
-  | otherwise = Sets (conflicts m name (opening <> " because of:") "and because of:" cores)
 
 regardless :: Verdict -> OptionId -> [Chunk]
 regardless v o = [Words ("no valid design " <> designVerb v <> " "), Named o, Words ", whatever the rulings"]
@@ -638,17 +613,29 @@ data Explained = Explained
 -- | Returns each cause of the option's verdict under its heading.
 explained :: Model -> OptionView -> [Explained]
 explained m v = case v.row.verdict of
-  Just verdict -> zipWith (explainedUnder verdict) (opening verdict : repeat "and because of:") v.causes
+  Just verdict -> explainedAt m v.point v.row.option verdict (verdictText verdict) v.causes
   Nothing -> []
-  where
-    opening verdict = verdictText verdict <> " because of:"
-    explainedUnder verdict h c
-      | Set.null c.rulings = Explained (regardless verdict v.row.option) [] c
-      | otherwise = Explained [Words h] (map (rulingChunks m v.point) (Set.toList c.rulings)) c
 
-becauseLines :: Because -> [Text]
-becauseLines (Regardless cs) = [plain cs]
-becauseLines (Sets sets) = setLines sets
+-- | Returns each cause of the option's verdict, headed by the opening and
+-- "because of:" for the first, "and because of:" for the rest.
+explainedAt :: Model -> Text -> OptionId -> Verdict -> Text -> [Cause] -> [Explained]
+explainedAt m name o v opening = zipWith explainedUnder (opening <> " because of:" : repeat "and because of:")
+  where
+    explainedUnder h c
+      | Set.null c.rulings = Explained (regardless v o) [] c
+      | otherwise = Explained [Words h] (map (rulingChunks m name) (Set.toList c.rulings)) c
+
+explainedLines :: [Explained] -> [Text]
+explainedLines = concatMap explanationLines
+
+-- | Returns the cause's heading, its rulings, then the constraints under
+-- `through:`.
+explanationLines :: Explained -> [Text]
+explanationLines e =
+  plain e.heading
+    : map (("  " <>) . plain) e.rulings
+    ++ ["  through:" | not (null e.cause.constraints)]
+    ++ map (("    " <>) . plain . constraintChunks) e.cause.constraints
 
 -- | Returns what no valid design does to an option with the verdict.
 designVerb :: Verdict -> Text
@@ -862,12 +849,13 @@ stepLines name step = ruled step.edit step.applied : map ("  " <>) (unstated ++ 
 -- after it, whichever the remark is about.
 remark :: Model -> Model -> Text -> Remark -> [Text]
 remark before _ name (AlreadyDecided o v cores) =
-  becauseLines (because before name (optionName o <> " was already " <> verdictText v) v o shown)
+  explainedLines
+    (explainedAt before name o v (optionName o <> " was already " <> verdictText v) [Cause c [] | c <- shown])
     ++ ["and " <> tshow (length rest) <> " more: quandary why " <> optionName o | not (null rest)]
   where
     (shown, rest) = splitAt 1 cores
 remark _ after name (StillDecided o v cores) =
-  becauseLines (because after name (optionName o <> " is still " <> verdictText v) v o cores)
+  explainedLines (explainedAt after name o v (optionName o <> " is still " <> verdictText v) [Cause c [] | c <- cores])
 remark _ _ _ (ReasonChanged old new) = ["reason: " <> reasonOrNone old <> " -> " <> reasonOrNone new]
 remark _ _ _ (AlsoRuledIn p) = ["also ruled so in " <> p]
 remark _ _ _ (CommitsToRaiser r) = ["commits to raiser " <> optionName r <> ", which nothing else rules"]

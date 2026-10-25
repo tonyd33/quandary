@@ -1,2 +1,5 @@
 sync/crdt is impossible because of:
   accept store/files (current: must open in any editor)
+  through:
+    sync/crdt needs store/sqlite
+    store/where takes at most one option

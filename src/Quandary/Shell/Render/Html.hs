@@ -6,7 +6,7 @@ module Quandary.Shell.Render.Html
   )
 where
 
-import Control.Monad (forM_, unless, zipWithM_)
+import Control.Monad (forM_, unless, when, zipWithM_)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Builder (Builder, toLazyByteString)
 import Data.ByteString.Lazy qualified as Lazy
@@ -14,7 +14,7 @@ import Data.Foldable (toList)
 import Data.List (intersperse)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -23,12 +23,12 @@ import Data.Text.Encoding (decodeUtf8)
 import Lucid
 import Network.HTTP.Types.URI (encodePathSegments, renderQueryText)
 import Quandary.Core.Analyse
-import Quandary.Core.Compile (Constraint (..))
 import Quandary.Core.Compile qualified as Compile
 import Quandary.Core.Rulings (EditError, PointEdit (..))
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 import Quandary.Core.View
+import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
 import Quandary.Shell.Markdown qualified as Markdown
 import Quandary.Shell.Render.Cytoscape qualified as Cytoscape
@@ -45,7 +45,18 @@ link (OptionAt p o) = path (["p", p, "o"] ++ Text.splitOn "/" o)
 link Points = path ["points"]
 link (WhatifAt p ws) = path ["p", p, "whatif"] <> query [(verbName v, t) | (v, t) <- ws]
 link (GraphAt p dead) = path ["p", p, "graph"] <> deadQuery dead
-link (BoxAt p dead) = path ["p", p, "box"] <> deadQuery dead
+link (BoxAt p dead play) = path ["p", p, "box"] <> boxQuery dead play
+link (RecordAt p ws) = path ["p", p, "record"] <> query [(verbName v, t) | (v, t) <- ws]
+
+boxQuery :: Dead -> Maybe [(Verb, Text)] -> Text
+boxQuery dead play = case items of
+  [] -> ""
+  _ -> utf8 (renderQueryText True items)
+  where
+    items =
+      [("play", Nothing) | isJust play]
+        ++ [(verbName v, Just t) | (v, t) <- concat play]
+        ++ [("all", Nothing) | dead == ShowDead]
 
 deadQuery :: Dead -> Text
 deadQuery HideDead = ""
@@ -73,12 +84,12 @@ titledDocument point title d = doctypehtml_ $ do
     meta_ [charset_ "utf-8"]
     meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1"]
     title_ (toHtml ("quandary: " <> title))
-    link_ [rel_ "stylesheet", href_ "/assets/style.css"]
+    link_ [rel_ "stylesheet", href_ (Assets.assetPath "style.css")]
   body_ $ do
     nav_ $ do
       a_ [href_ (link (StatusAt point))] (toHtml ("point " <> point))
       " "
-      a_ [href_ (link (BoxAt point HideDead))] "box"
+      a_ [href_ (link (BoxAt point HideDead Nothing))] "box"
       " "
       a_ [href_ (link (GraphAt point HideDead))] "graph"
       " "
@@ -87,7 +98,14 @@ titledDocument point title d = doctypehtml_ $ do
       form_ [method_ "get", action_ (path ["p", point, "go"])] $
         input_ [type_ "search", name_ "id", placeholder_ "go to id"]
     main_ (pageHtml d)
-    script_ ("new EventSource(\"/events?since=" <> revisionText d.revision <> "\").onmessage = () => location.reload();")
+    unless (answersPost d) $
+      script_ ("new EventSource(\"/events?since=" <> revisionText d.revision <> "\").onmessage = () => location.reload();")
+
+-- | Holds for the page answering a posted form.
+answersPost :: Drawn -> Bool
+answersPost d = case d.shown of
+  Shown _ RecordedPage {} -> True
+  _ -> False
 
 revisionText :: Revision -> Text
 revisionText (Revision n) = Render.tshow n
@@ -102,7 +120,9 @@ pageHtml d = case d.shown of
     PointsPage ps -> pointsHtml ps
     WhatifPage p ss r -> whatifHtml p ss r
     GraphPage p dead g -> graphHtml p dead g
-    BoxPage p dead a -> boxHtml m p dead a
+    BoxPage box -> boxHtml box
+    RecordPage p ws -> recordHtml d.revision p ws
+    RecordedPage p ws r -> recordedHtml p ws r
     NotFound t -> h1_ "not found" >> p_ (toHtml t)
 
 problemsHtml :: [FileProblem] -> Html ()
@@ -342,7 +362,7 @@ graphHtml p dead g = do
   scripts ["cytoscape.min.js", "cytoscape-dagre.min.js", "cytoscape-expand-collapse.js", "graph-style.js", "graph.js"]
 
 scripts :: [Text] -> Html ()
-scripts = mapM_ (\a -> script_ [src_ ("/assets/" <> a)] ("" :: Text))
+scripts = mapM_ (\a -> script_ [src_ (Assets.assetPath a)] ("" :: Text))
 
 constraintsHelp :: Text
 constraintsHelp = "Draw every needs, needs-one-of and excludes edge. Hovering an option draws its own."
@@ -355,23 +375,152 @@ deadToggle r HideDead =
 deadToggle r ShowDead = a_ [class_ "tool", href_ (link (r HideDead))] "hide dead"
 
 -- | Returns each status group's questions as rows of their options, an
--- option's constraints and raised questions highlighted on hover.
-boxHtml :: Model -> Text -> Dead -> Analysis -> Html ()
-boxHtml m p dead a = do
+-- option's constraints and raised questions highlighted on hover. Played,
+-- a click on an option cycles its supposition, and what the last one moved
+-- is marked.
+boxHtml :: Box -> Html ()
+boxHtml box = do
   div_ [class_ "graph-tools"] $ do
-    h1_ (toHtml ("box at " <> p))
-    deadToggle (BoxAt p) dead
+    h1_ (toHtml (routeTitle (BoxAt box.point box.dead (supposedOf box))))
+    deadToggle (\d -> BoxAt box.point d (supposedOf box)) box.dead
+    playToggle box
+  forM_ box.play (playHtml box)
   p_ [class_ "legend muted"] $ do
     "hover an option:"
     forM_ legend (\(cls, t) -> span_ [class_ cls] t)
-  case a of
-    StaleAt cores -> pre_ (toHtml (Text.unlines (Render.staleLines m p cores)))
+  case box.analysis of
+    StaleAt cores -> pre_ (toHtml (Text.unlines (Render.staleLines box.model box.point cores)))
     Fresh s -> do
-      let attrs = constraintData m.space
-      forM_ (boxGroups m p dead s) $ \g -> do
+      let context = cellContext box
+      forM_ (boxGroups box.model box.point box.dead (standing =<< (.before) =<< box.play) s) $ \g -> do
         h2_ (toHtml (Render.groupTitle g.kind) >> helpIcon (Render.groupHelp g.kind))
-        div_ [class_ "box"] (mapM_ (boxRowHtml attrs p) g.rows)
+        div_ [class_ "box"] (mapM_ (boxRowHtml context) g.rows)
       scripts ["box.js"]
+
+supposedOf :: Box -> Maybe [(Verb, Text)]
+supposedOf box = (.supposed) <$> box.play
+
+-- | Returns a link that starts playing the box, or stops playing it when
+-- played.
+playToggle :: Box -> Html ()
+playToggle box = case box.play of
+  Nothing ->
+    a_
+      [class_ "tool", href_ (link (BoxAt box.point box.dead (Just []))), helpOf playHelp]
+      "play"
+  Just _ -> a_ [class_ "tool", href_ (link (BoxAt box.point box.dead Nothing))] "stop playing"
+
+playHelp :: Text
+playHelp = "Suppose accepts and defeats by clicking options, see what each moves, undo. Nothing is recorded until you record."
+
+-- | Returns the suppositions in order, each removable, those past the ones
+-- drawn marked, with undo and reset, and each set of rulings reaching no
+-- design.
+playHtml :: Box -> Play -> Html ()
+playHtml box play = div_ [class_ "play"] $ do
+  span_ [class_ "lead"] "supposing"
+  when (null play.supposed) $ span_ [class_ "muted"] "nothing yet"
+  forM_ (zip [0 ..] play.supposed) $ \(i, (v, t)) ->
+    a_
+      [ class_ ("tool" <> if i < play.drawn then "" else " conflicting")
+      , href_ (playLink (deleteAt i play.supposed))
+      , helpOf "Remove."
+      ]
+      (toHtml (verbName v <> " " <> t))
+  unless (null play.supposed) $ do
+    a_ [class_ "tool", href_ (playLink (init play.supposed))] "undo"
+    a_ [class_ "tool", href_ (playLink [])] "reset"
+    a_ [class_ "tool", href_ (link (WhatifAt box.point play.supposed))] "whatif"
+    when (null play.conflict) $
+      a_ [class_ "tool", href_ (link (RecordAt box.point play.supposed)), helpOf recordHelp] "record"
+  unless (null play.conflict) $ div_ [class_ "conflict"] $ do
+    p_ "these suppositions reach no design. The box shows the ones before the first that conflicts. No design holds:"
+    forM_ play.conflict $ \core -> ul_ (forM_ (Set.toList core) (li_ . chunksHtml box.point . Render.rulingChunks box.model box.point))
+  p_
+    [class_ "muted"]
+    "Click an option to accept it, again to defeat it, again to clear it. Outlined: what the last click moved."
+  where
+    playLink ws = link (BoxAt box.point box.dead (Just ws))
+
+deleteAt :: Int -> [a] -> [a]
+deleteAt i xs = take i xs ++ drop (i + 1) xs
+
+recordHelp :: Text
+recordHelp = "Record these as rulings at the point, each with a reason."
+
+-- | Returns the form recording the suppositions as rulings, with a reason
+-- for each and the revision it was drawn at.
+recordHtml :: Revision -> Text -> [(Verb, Text)] -> Html ()
+recordHtml rev p ws = do
+  h1_ (toHtml ("record at " <> p))
+  p_
+    [class_ "muted"]
+    (toHtml ("Each becomes a ruling at " <> p <> ", as accept and defeat record one. A defeat needs a reason."))
+  form_ [method_ "post", action_ (path ["p", p, "rule"]), class_ "record"] $ do
+    input_ [type_ "hidden", name_ "revision", value_ (revisionText rev)]
+    forM_ ws $ \(v, t) -> label_ $ do
+      input_ [type_ "hidden", name_ (verbName v), value_ t]
+      span_ (toHtml (verbName v <> " ") >> idLinkFor p t)
+      input_ ([type_ "text", name_ "reason", placeholder_ "reason"] ++ [required_ "" | v == DefeatVerb])
+    button_ [type_ "submit"] "record"
+  p_ (backToPlaying p ws)
+
+-- | Returns the id linked to its page: an option's, or a question's for an
+-- id naming one.
+idLinkFor :: Text -> Text -> Html ()
+idLinkFor p t = a_ [class_ "id", href_ (path ["p", p, "go"] <> query [("id", t)])] (toHtml t)
+
+-- | Returns what recording moved, or why nothing was written.
+recordedHtml :: Text -> [(Verb, Text)] -> Either NotRecorded [Step] -> Html ()
+recordedHtml p ws (Left why) = do
+  h1_ "nothing recorded"
+  pre_ (toHtml (notRecordedText p why))
+  p_ (backToPlaying p ws)
+recordedHtml p _ (Right steps) = do
+  h1_ (toHtml ("recorded at " <> p))
+  pre_ (toHtml (Text.unlines (concatMap (Render.stepLines p) steps)))
+  p_ $ do
+    a_ [class_ "tool", href_ (link (BoxAt p HideDead Nothing))] "box"
+    " "
+    a_ [class_ "tool", href_ (link (BoxAt p HideDead (Just [])))] "play again"
+
+notRecordedText :: Text -> NotRecorded -> Text
+notRecordedText _ SpaceChanged = "the space changed since the page was drawn; nothing recorded\n"
+notRecordedText _ (UnknownId t) = "unknown id " <> t <> "\n"
+notRecordedText _ (NoReason t) = "defeat " <> t <> " needs a reason\n"
+notRecordedText p (RulingRefused m r) = Render.refusal m p r
+
+backToPlaying :: Text -> [(Verb, Text)] -> Html ()
+backToPlaying p ws = a_ [class_ "tool", href_ (link (BoxAt p HideDead (Just ws)))] "back to playing"
+
+-- | What a box page gives each cell: the attributes of its constraints,
+-- the link a click follows, and the options supposed.
+data CellContext = CellContext
+  { point :: Text
+  , attrs :: Map OptionId [Attributes]
+  , href :: OptionId -> Text
+  , supposed :: Set Text
+  }
+
+cellContext :: Box -> CellContext
+cellContext box =
+  CellContext
+    { point = box.point
+    , attrs = constraintData box.model.space
+    , href = maybe (link . OptionAt box.point . optionName) (\play -> playLink play.supposed) box.play
+    , supposed = Set.fromList (maybe [] (map snd . (.supposed)) box.play)
+    }
+  where
+    playLink ws o = link (BoxAt box.point box.dead (Just (cycled ws (optionName o))))
+
+-- | Returns the suppositions with the option's next one, last: accepted
+-- when it had none, defeated when accepted, none when defeated.
+cycled :: [(Verb, Text)] -> Text -> [(Verb, Text)]
+cycled ws o = [w | w@(_, t) <- ws, t /= o] ++ next (lookup o [(t, v) | (v, t) <- ws])
+  where
+    next Nothing = [(AcceptVerb, o)]
+    next (Just AcceptVerb) = [(DefeatVerb, o)]
+    next (Just _) = []
 
 legend :: [(Text, Html ())]
 legend =
@@ -383,22 +532,33 @@ legend =
   , ("raised", "raised")
   ]
 
-boxRowHtml :: Map OptionId [Attributes] -> Text -> BoxRow -> Html ()
-boxRowHtml attrs p r = div_ [class_ "box-row", data_ "key" (Cytoscape.questionKey r.question.id)] $ do
-  div_ [class_ "box-question"] (questionLink p r.question.id >> span_ [class_ "title"] (toHtml r.question.title))
-  div_ [class_ "cells"] (mapM_ (cellHtml attrs p) r.cells)
+boxRowHtml :: CellContext -> BoxRow -> Html ()
+boxRowHtml context r = div_ [class_ ("box-row" <> movedClass r.was), data_ "key" (Cytoscape.questionKey r.question.id)] $ do
+  div_ [class_ "box-question"] $ do
+    questionLink context.point r.question.id
+    span_ [class_ "title"] (toHtml r.question.title)
+    forM_ r.was (\st -> span_ [class_ "badge state"] (toHtml ("was " <> Render.groupTitle (groupKind st))))
+  div_ [class_ "cells"] (mapM_ (cellHtml context) r.cells)
 
-cellHtml :: Map OptionId [Attributes] -> Text -> Cell -> Html ()
-cellHtml attrs p c =
+cellHtml :: CellContext -> Cell -> Html ()
+cellHtml context c =
   a_
-    ( [ class_ ("cell badge " <> markClass (Render.mark c.ruling (Just c.verdict)))
-      , href_ (link (OptionAt p (optionName c.option)))
-      , title_ (optionName c.option <> maybe "" (": " <>) c.title)
+    ( [ class_ ("cell badge " <> markClass (Render.mark c.ruling (Just c.verdict)) <> movedClass c.was <> supposedClass)
+      , href_ (context.href c.option)
+      , title_
+          (optionName c.option <> maybe "" (": " <>) c.title <> maybe "" (\v -> " (was " <> Render.verdictText v <> ")") c.was)
       , data_ "key" (Cytoscape.optionKey c.option)
       ]
-        ++ Map.findWithDefault [] c.option attrs
+        ++ Map.findWithDefault [] c.option context.attrs
     )
-    (toHtml (Render.key c.option) >> chunksHtml p (Render.rankChunks c.rank))
+    (toHtml (Render.key c.option) >> chunksHtml context.point (Render.rankChunks c.rank))
+  where
+    supposedClass
+      | Set.member (optionName c.option) context.supposed = " supposed"
+      | otherwise = ""
+
+movedClass :: Maybe a -> Text
+movedClass = maybe "" (const " moved")
 
 -- | Returns, for each option, data attributes holding the keys of the
 -- options it needs, needs one of and excludes and of the questions it
@@ -406,7 +566,11 @@ cellHtml attrs p c =
 constraintData :: Space -> Map OptionId [Attributes]
 constraintData space = Map.map attributes (Map.fromListWith (Map.unionWith (<>)) (relations ++ raises))
   where
-    relations = [(o, keyed name k) | (c, _) <- Compile.constraints space, (o, (name, k)) <- relation c]
+    relations =
+      [ (o, keyed (Cytoscape.relationClass e.relation) (Cytoscape.optionKey e.target))
+      | (c, _) <- Compile.constraints space
+      , (o, e) <- Graph.edgesOf c
+      ]
     raises =
       [ (r, keyed "raises" (Cytoscape.questionKey q.id))
       | q <- Map.elems space.questions
@@ -415,12 +579,6 @@ constraintData space = Map.map attributes (Map.fromListWith (Map.unionWith (<>))
       ]
     keyed name k = Map.singleton name (Set.singleton k)
     attributes = map (\(name, ks) -> data_ name (Text.unwords (Set.toList ks))) . Map.toList
-
-relation :: Constraint -> [(OptionId, (Text, Text))]
-relation (Needs o p) = [(o, ("needs", Cytoscape.optionKey p))]
-relation (NeedsOneOf o ps) = [(o, ("needs-one-of", Cytoscape.optionKey p)) | p <- toList ps]
-relation (Excludes o p) = [(o, ("excludes", Cytoscape.optionKey p))]
-relation _ = []
 
 -- | Returns the JSON safe inside a `<script>`: every `<` escaped.
 jsonText :: Aeson.ToJSON a => a -> Text

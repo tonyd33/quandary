@@ -22,6 +22,9 @@ module Quandary.Core.Analyse
   , explain
   , edit
   , whatif
+  , suppose
+  , supposeEach
+  , moved
   , Supposition (..)
   , Step (..)
   , Remark (..)
@@ -604,12 +607,23 @@ data Supposition
 -- | Returns the model with the suppositions applied in order, and what
 -- would move.
 whatif :: Monad m => Solver m -> Model -> Text -> [Supposition] -> m (Either EditError (Model, Moved))
-whatif solver m name ss = case foldM supposing m ss of
+whatif solver m name ss = case suppose m name ss of
   Left e -> pure (Left e)
   Right m' -> Right . (,) m' <$> movement solver m m' name
-  where
-    supposing now (Suppose l) = pure (withPoint now name (withRuling now.space l Nothing (pointNamed now.points name)))
-    supposing now (Apply e) = applied now name e
+
+-- | Returns the model with the suppositions applied, in order, to the
+-- named point.
+suppose :: Model -> Text -> [Supposition] -> Either EditError Model
+suppose m name = foldM (supposing name) m
+
+-- | Returns the model under each prefix of the suppositions, the model
+-- given first.
+supposeEach :: Model -> Text -> [Supposition] -> Either EditError (NonEmpty Model)
+supposeEach m name = sequence . NonEmpty.scanl (\now s -> now >>= \m' -> supposing name m' s) (Right m)
+
+supposing :: Text -> Model -> Supposition -> Either EditError Model
+supposing name now (Suppose l) = pure (withPoint now name (withRuling now.space l Nothing (pointNamed now.points name)))
+supposing name now (Apply e) = applied now name e
 
 data Adoption = Adoption
   { model :: Model

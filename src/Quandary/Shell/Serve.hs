@@ -23,12 +23,16 @@ import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
 import Quandary.Shell.Render.Html (document, link, titledDocument)
 import Quandary.Shell.Resolve (Verb, verbNamed)
+import Text.Read (readMaybe)
 
 app :: Live -> Text -> Int -> Application
 app live point port req respond
   | not (hostAllowed port (requestHeaderHost req)) =
       respond (plain status403 "refused: the Host header is not this server's\n")
-  | requestMethod req /= methodGet = respond (plain status405 "only GET\n")
+  | requestMethod req /= methodGet && not (sameOrigin req) =
+      respond (plain status403 "refused: the Origin header is not this server's\n")
+  | requestMethod req == methodPost, ["p", p, "rule"] <- pathInfo req = recordFrom live p req >>= respond
+  | requestMethod req /= methodGet = respond (plain status405 "only GET, and POST to record\n")
   | pathInfo req == ["events"] = respond (events live (since (queryString req)))
   | ["assets", name] <- pathInfo req = respond (maybe (plain status404 "not found\n") served (Assets.asset name))
   | ["p", p, "go"] <- pathInfo req
@@ -37,6 +41,35 @@ app live point port req respond
   | otherwise = case route point (pathInfo req) (queryString req) of
       Nothing -> respond (plain status404 "not found\n")
       Just r -> page live r >>= respond . responseOf (document r)
+
+-- | Record the suppositions the form posts.
+recordFrom :: Live -> Text -> Request -> IO Response
+recordFrom live p req =
+  recordings . parseQuery . Lazy.toStrict <$> strictRequestBody req >>= \case
+    Nothing -> pure (plain status400 "a malformed record form\n")
+    Just (rev, rs) -> responseOf (titledDocument p ("record at " <> p)) <$> record live p rev rs
+
+-- | Holds when the request's `Origin` is this server as its `Host` names it.
+sameOrigin :: Request -> Bool
+sameOrigin req = case (lookup "Origin" (requestHeaders req), requestHeaderHost req) of
+  (Just origin, Just host) -> origin == "http://" <> host
+  _ -> False
+
+-- | Returns the revision the form was drawn at and each supposition with
+-- its reason, in order: a verb and id, then a reason.
+recordings :: Query -> Maybe (Revision, [(Verb, Text, Text)])
+recordings (("revision", Just r) : rest) = (,) <$> revisionOf r <*> go rest
+  where
+    go [] = Just []
+    go (item : ("reason", Just reason) : more) = do
+      (v, t) <- supposition item
+      one <- (,,) v t <$> decoded reason
+      (one :) <$> go more
+    go _ = Nothing
+recordings _ = Nothing
+
+revisionOf :: ByteString -> Maybe Revision
+revisionOf t = Revision <$> readMaybe (Char8.unpack t)
 
 responseOf :: (Drawn -> Html ()) -> Drawn -> Response
 responseOf render d = html status (render d)
@@ -81,9 +114,7 @@ ipLiteral name = ipv4 || ipv6
     ipv6Char c = isHexDigit c || c == ':' || c == '.'
 
 since :: Query -> Maybe Revision
-since q = case lookup "since" q of
-  Just (Just t) | [(n, "")] <- reads (Char8.unpack t) -> Just (Revision n)
-  _ -> Nothing
+since q = lookup "since" q >>= (>>= revisionOf)
 
 -- | Send each new revision as a server-sent event.
 events :: Live -> Maybe Revision -> Response
@@ -107,8 +138,16 @@ route _ ("p" : p : "q" : i@(_ : _)) _ = Just (QuestionAt p (Id (Text.intercalate
 route _ ("p" : p : "o" : i@(_ : _)) _ = Just (OptionAt p (Text.intercalate "/" i))
 route _ ["p", p, "whatif"] q = WhatifAt p <$> traverse supposition q
 route _ ["p", p, "graph"] q = Just (GraphAt p (dead q))
-route _ ["p", p, "box"] q = Just (BoxAt p (dead q))
+route _ ["p", p, "record"] q = RecordAt p <$> traverse supposition q
+route _ ["p", p, "box"] q = BoxAt p (dead q) <$> played q
 route _ _ _ = Nothing
+
+-- | Returns the suppositions the query plays, in order, when it holds
+-- `play`.
+played :: Query -> Maybe (Maybe [(Verb, Text)])
+played q
+  | isJust (lookup "play" q) = Just <$> traverse supposition [i | i@(k, _) <- q, k `notElem` ["play", "all"]]
+  | otherwise = Just Nothing
 
 -- | Returns whether the query asks for dead parts too, with `all`.
 dead :: Query -> Dead

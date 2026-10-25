@@ -2,17 +2,39 @@ module Frontends (frontends) where
 
 import Control.Concurrent.Async (forConcurrently)
 import Control.Exception (evaluate)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.Char (isHexDigit)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as Text
 import Data.Text.IO qualified as TextIO
 import Data.Text.Lazy qualified as LazyText
+import Data.Text.Lazy.Encoding qualified as LazyText
 import Fixtures (fixture, listed, other, withCopy)
 import Lucid (renderBS, renderText)
-import Network.HTTP.Types (Status (..), decodePath, hLocation, parseQuery, status200, status303, status403, status404)
-import Network.Wai (defaultRequest, pathInfo, queryString, requestHeaderHost, responseHeaders, responseStatus)
+import Network.HTTP.Types
+  ( Status (..)
+  , decodePath
+  , hLocation
+  , methodPost
+  , parseQuery
+  , status200
+  , status303
+  , status403
+  , status404
+  )
+import Network.Wai
+  ( defaultRequest
+  , pathInfo
+  , queryString
+  , requestHeaderHost
+  , requestHeaders
+  , requestMethod
+  , responseHeaders
+  , responseStatus
+  , setRequestBodyChunks
+  )
 import Network.Wai.Internal (ResponseReceived (..))
 import Quandary.Core.Analyse (Analysis (..), Cause (..))
 import Quandary.Core.Compile (Constraint (..))
@@ -50,6 +72,7 @@ frontends =
     , testGroup "html" html
     , testGroup "go to" goTo
     , testGroup "server" server
+    , testGroup "recording" recording
     , testGroup "live" live
     ]
 
@@ -65,8 +88,11 @@ routes =
       , Points
       , GraphAt "current" HideDead
       , GraphAt "current" ShowDead
-      , BoxAt "current" HideDead
-      , BoxAt "current" ShowDead
+      , BoxAt "current" HideDead Nothing
+      , BoxAt "current" ShowDead Nothing
+      , BoxAt "current" HideDead (Just [])
+      , RecordAt "current" [(AcceptVerb, "sync/git"), (DefeatVerb, "sync/how.other")]
+      , BoxAt "current" ShowDead (Just [(AcceptVerb, "sync/git"), (DefeatVerb, "sync/how.other")])
       , WhatifAt "edit-offline" []
       , WhatifAt
           "current"
@@ -80,6 +106,13 @@ routes =
 
 parsed :: Text.Text -> Maybe Route
 parsed = uncurry (route "current") . decodePath . Text.encodeUtf8
+
+-- | Returns the page with each asset's version left out.
+unversioned :: LazyText.Text -> LazyText.Text
+unversioned t = case LazyText.breakOn "?v=" t of
+  (before, after)
+    | LazyText.null after -> before
+    | otherwise -> before <> unversioned (LazyText.dropWhile isHexDigit (LazyText.drop 3 after))
 
 drawnAt :: Route -> IO Drawn
 drawnAt r = withLive fixture (`page` r)
@@ -196,7 +229,7 @@ html :: [TestTree]
 html =
   [ goldenVsString "question page" "test/golden/question.html" $ do
       let r = QuestionAt "current" (Id "sync/how")
-      renderBS . document r <$> drawnAt r
+      LazyText.encodeUtf8 . unversioned . renderText . document r <$> drawnAt r
   , testCase "the graph page holds each question and option, linked to its page" $ do
       out <- htmlAt (GraphAt "current" ShowDead)
       assertBool "question node" ("\"id\":\"q:sync/how\"" `Text.isInfixOf` out)
@@ -211,14 +244,35 @@ html =
       out <- htmlAt (GraphAt "current" HideDead)
       assertBool (Text.unpack out) ("\"constraints\":[[\"needs\",\"o:store/files\"]]" `Text.isInfixOf` out)
   , testCase "the box lists each live question's live options with their constraints" $ do
-      out <- htmlAt (BoxAt "current" HideDead)
+      out <- htmlAt (BoxAt "current" HideDead Nothing)
       assertBool "question row" ("data-key=\"q:sync/how\"" `Text.isInfixOf` out)
       assertBool "possible option" ("data-key=\"o:sync/git\" data-needs=\"o:store/files\"" `Text.isInfixOf` out)
       assertBool "raised question" ("data-raises=\"q:conflict/shown q:sync/merge-conflicts\"" `Text.isInfixOf` out)
       assertBool "impossible option" (not ("o:sync/lww" `Text.isInfixOf` out))
       assertBool "dormant question" (not ("q:store/editors" `Text.isInfixOf` out))
+  , testCase "playing a supposition draws it and marks what it moved" $
+      pageAt (BoxAt "current" HideDead (Just [(AcceptVerb, "sync/git")])) >>= \case
+        BoxPage box -> do
+          ((.drawn) <$> box.play, (.conflict) <$> box.play) @?= (Just 1, Just [])
+          out <- htmlAt (BoxAt "current" HideDead (Just [(AcceptVerb, "sync/git")]))
+          assertBool "supposed" ("cell badge accepted moved supposed" `Text.isInfixOf` out)
+          assertBool "moved" ("sync/how.other (was possible)" `Text.isInfixOf` out)
+        _ -> assertFailure "not a box page"
+  , testCase "a click on a played option cycles it: accepted, defeated, then neither" $ do
+      none <- htmlAt (BoxAt "current" HideDead (Just []))
+      assertBool "accept" ("href=\"/p/current/box?play&amp;accept=sync%2Fgit\"" `Text.isInfixOf` none)
+      accepted <- htmlAt (BoxAt "current" HideDead (Just [(AcceptVerb, "sync/git")]))
+      assertBool "defeat" ("href=\"/p/current/box?play&amp;defeat=sync%2Fgit\"" `Text.isInfixOf` accepted)
+      defeated <- htmlAt (BoxAt "current" HideDead (Just [(DefeatVerb, "sync/git")]))
+      assertBool "neither" ("href=\"/p/current/box?play\"" `Text.isInfixOf` defeated)
+  , testCase "suppositions reaching no design draw the ones before the conflict and name it" $
+      pageAt (BoxAt "current" HideDead (Just [(AcceptVerb, "sync/git"), (AcceptVerb, "sync/lww")])) >>= \case
+        BoxPage box -> do
+          (.drawn) <$> box.play @?= Just 1
+          assertBool "conflict" (maybe False (not . null . (.conflict)) box.play)
+        _ -> assertFailure "not a box page"
   , testCase "the box shows dead parts when asked" $ do
-      out <- htmlAt (BoxAt "current" ShowDead)
+      out <- htmlAt (BoxAt "current" ShowDead Nothing)
       assertBool "impossible option" ("data-key=\"o:sync/lww\"" `Text.isInfixOf` out)
       assertBool "dormant question" ("data-key=\"q:store/editors\"" `Text.isInfixOf` out)
   , testCase "a title cannot close the graph's script" $ withCopy $ \dir -> do
@@ -288,6 +342,52 @@ responseFor host path q = withLive fixture $ \l -> do
       seen res = (responseStatus res, Text.decodeUtf8 <$> lookup hLocation (responseHeaders res))
   _ <- app l "current" 8080 req (\res -> ResponseReceived <$ writeIORef got (Just (seen res)))
   readIORef got >>= maybe (assertFailure "no response") pure
+
+-- | Returns the status answering a record form posted to the copy with the
+-- origin and body, and the copy's current point afterwards.
+recordIn :: FilePath -> Maybe Text.Text -> Text.Text -> IO (Status, Text.Text)
+recordIn dir origin body = withLive dir $ \l -> do
+  got <- newIORef Nothing
+  chunks <- newIORef [Text.encodeUtf8 body]
+  let next = atomicModifyIORef' chunks (\cs -> (drop 1 cs, mconcat (take 1 cs)))
+      req =
+        setRequestBodyChunks next $
+          defaultRequest
+            { requestMethod = methodPost
+            , requestHeaderHost = Just "localhost:8080"
+            , requestHeaders = [("Origin", Text.encodeUtf8 o) | Just o <- [origin]]
+            , pathInfo = ["p", "current", "rule"]
+            }
+  _ <- app l "current" 8080 req (\res -> ResponseReceived <$ writeIORef got (Just (responseStatus res)))
+  status <- readIORef got >>= maybe (assertFailure "no response") pure
+  (,) status <$> TextIO.readFile (dir </> "points/current.md")
+
+recording :: [TestTree]
+recording =
+  [ testCase "a record form from this server writes the rulings" $ withCopy $ \dir -> do
+      (status, point) <- recordIn dir (Just "http://localhost:8080") "revision=0&defeat=conflict%2Fcopy&reason=not+now"
+      status @?= status200
+      assertBool (Text.unpack point) (all (`Text.isInfixOf` point) ["conflict/copy:", "reason: not now"])
+  , testCase "a record form from another origin is refused" $ withCopy $ \dir -> do
+      before <- TextIO.readFile (dir </> "points/current.md")
+      (status, point) <- recordIn dir (Just "http://evil.example") "revision=0&defeat=conflict%2Fcopy&reason=x"
+      (status, point) @?= (status403, before)
+  , testCase "a record form without an origin is refused" $ withCopy $ \dir -> do
+      (status, _) <- recordIn dir Nothing "revision=0&defeat=conflict%2Fcopy&reason=x"
+      status @?= status403
+  , testCase "a record form drawn before the space changed writes nothing" $ withCopy $ \dir -> do
+      before <- TextIO.readFile (dir </> "points/current.md")
+      (_, point) <- recordIn dir (Just "http://localhost:8080") "revision=7&defeat=conflict%2Fcopy&reason=x"
+      point @?= before
+  , testCase "a defeat without a reason writes nothing" $ withCopy $ \dir -> do
+      before <- TextIO.readFile (dir </> "points/current.md")
+      (_, point) <- recordIn dir (Just "http://localhost:8080") "revision=0&defeat=conflict%2Fcopy&reason="
+      point @?= before
+  , testCase "rulings leaving the point stale write nothing" $ withCopy $ \dir -> do
+      before <- TextIO.readFile (dir </> "points/current.md")
+      (_, point) <- recordIn dir (Just "http://localhost:8080") "revision=0&accept=sync%2Fcrdt&reason="
+      point @?= before
+  ]
 
 goTo :: [TestTree]
 goTo =

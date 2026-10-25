@@ -10,12 +10,15 @@ module Quandary.Shell.Storage.Files
   , usableModel
   , problemsOf
   , writePoint
+  , withRulingLock
   , removePoint
   , pathOf
   , locate
   )
 where
 
+import Control.Concurrent (threadDelay)
+import Control.Exception (finally)
 import Control.Monad (forM, forM_, unless)
 import Data.ByteString qualified as ByteString
 import Data.Conduit (runConduitRes, (.|))
@@ -28,22 +31,33 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
+import Data.Text.IO qualified as Text
+import GHC.IO.Handle.Lock (LockMode (..), hLock, hTryLock)
 import Quandary.Core.Source
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model, Validation (..))
 import Quandary.Shell.Markdown qualified as M
 import Quandary.Shell.Storage.Yaml
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeFile)
+import System.Directory
+  ( createDirectoryIfMissing
+  , doesDirectoryExist
+  , doesFileExist
+  , listDirectory
+  , removeFile
+  , renameFile
+  )
 import System.FilePath
   ( dropExtension
   , makeRelative
   , normalise
   , splitDirectories
+  , takeBaseName
   , takeDirectory
   , takeExtension
   , (<.>)
   , (</>)
   )
+import System.IO (IOMode (..), hClose, openBinaryTempFile, stderr, withFile)
 import Text.Libyaml qualified as Y
 
 data FileProblem = FileProblem
@@ -365,13 +379,39 @@ documentId (NoteDoc i) = i
 documentId (PointDoc n) = n
 documentId ConfigDoc = ""
 
--- | Write a point to its file, replacing what it held.
+-- | Write a point to its file.
 writePoint :: FilePath -> Point -> IO ()
 writePoint root p = do
   yaml <- runConduitRes (CL.sourceList (pointEvents p) .| Y.encodeWith (Y.setWidth Nothing Y.defaultFormatOptions))
-  let path = pathOf root (PointDoc p.name)
+  replaceFile (pathOf root (PointDoc p.name)) ("---\n" <> yaml <> "---\n" <> encodeUtf8 p.body)
+
+-- | Replace the file whole: a reader sees the old file or the new.
+replaceFile :: FilePath -> ByteString.ByteString -> IO ()
+replaceFile path content = do
   createDirectoryIfMissing True (takeDirectory path)
-  ByteString.writeFile path ("---\n" <> yaml <> "---\n" <> encodeUtf8 p.body)
+  (temporary, h) <- openBinaryTempFile (takeDirectory path) ("." <> takeBaseName path <> ".tmp")
+  ByteString.hPut h content `finally` hClose h
+  renameFile temporary path
+
+-- | Run the action holding the space's ruling lock, `.quandary/rulings.lock`,
+-- waiting for any other holder and saying so past a second. The lock is
+-- free once its holder exits, however it exits.
+withRulingLock :: FilePath -> IO a -> IO a
+withRulingLock root k = do
+  let path = root </> ".quandary" </> "rulings.lock"
+  createDirectoryIfMissing True (takeDirectory path)
+  withFile path AppendMode $ \h -> do
+    got <- tryFor (20 :: Int) h
+    unless got $ do
+      Text.hPutStrLn stderr ("waiting for another ruling to finish (" <> Text.pack path <> ")")
+      hLock h ExclusiveLock
+    k
+  where
+    tryFor 0 h = hTryLock h ExclusiveLock
+    tryFor n h =
+      hTryLock h ExclusiveLock >>= \case
+        True -> pure True
+        False -> threadDelay 50000 >> tryFor (n - 1) h
 
 removePoint :: FilePath -> Text -> IO ()
 removePoint root name = removeFile (pathOf root (PointDoc name))

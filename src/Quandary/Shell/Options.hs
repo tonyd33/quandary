@@ -3,6 +3,7 @@ module Quandary.Shell.Options
   , Command (..)
   , Action (..)
   , Format (..)
+  , writes
   , parse
   )
 where
@@ -45,6 +46,27 @@ data Action
   | Links
   | Diff Text Text
   | Graph Format
+
+-- | Holds when the action writes points.
+writes :: Action -> Bool
+writes (Accept _) = True
+writes (Defeat _) = True
+writes (Exhaust _) = True
+writes (Settle _) = True
+writes (Reopen _) = True
+writes (Defer _) = True
+writes (Prefer _ _) = True
+writes PointNew {} = True
+writes (PointRm _) = True
+writes (Adopt _ _) = True
+writes Status = False
+writes (Show _) = False
+writes (Why _) = False
+writes (Whatif _) = False
+writes Rulings = False
+writes Links = False
+writes (Diff _ _) = False
+writes (Graph _) = False
 
 data Format = Mermaid | Dot
 

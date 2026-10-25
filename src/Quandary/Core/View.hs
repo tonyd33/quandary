@@ -25,6 +25,7 @@ module Quandary.Core.View
   , optionDescription
   , statusBounds
   , statusGroups
+  , groupKind
   , choicesAt
   , boxGroups
   , pointViews
@@ -279,6 +280,15 @@ statusGroups m name bs s =
       , Open openness <- [s.states Map.! i]
       ]
 
+-- | Returns the status group a question in the state is listed under.
+groupKind :: QuestionState -> GroupKind
+groupKind (Open Raised) = Frontier
+groupKind (Open Taken) = TakenMore
+groupKind (Open (Unraised _)) = RaisedIfTaken
+groupKind Closed = ClosedGroup
+groupKind Deferred = DeferredGroup
+groupKind Dormant = DormantGroup
+
 choicesAt :: Model -> Text -> Map OptionId Bounds -> Standing -> Question -> Choices
 choicesAt m name bs s q =
   Choices
@@ -314,6 +324,8 @@ data BoxGroup = BoxGroup
 
 data BoxRow = BoxRow
   { question :: Question
+  , was :: Maybe QuestionState
+  -- ^ Its state before, when it differs.
   , cells :: [Cell]
   -- ^ By preference at the point.
   }
@@ -322,24 +334,48 @@ data Cell = Cell
   { option :: OptionId
   , title :: Maybe Text
   , verdict :: Verdict
+  , was :: Maybe Verdict
+  -- ^ Its verdict before, when it differs.
   , rank :: Maybe Rank
   , ruling :: Maybe (Literal, Text, Ruling)
   }
 
 -- | Returns every status group holding a question the view shows, each
--- question with the options it shows.
-boxGroups :: Model -> Text -> Dead -> Standing -> [BoxGroup]
-boxGroups m name dead s =
+-- question with the options it shows. Given the standing before, each
+-- question and option carries what it was when that differs, and is shown
+-- when it was shown before.
+boxGroups :: Model -> Text -> Dead -> Maybe Standing -> Standing -> [BoxGroup]
+boxGroups m name dead before s =
   [ BoxGroup g.kind rows
   | g <- statusGroups m name Map.empty s
-  , let rows = [row e.question | e <- g.entries, not (hidesQuestion dead (Map.lookup e.question.id s.states))]
+  , let rows = [row e.question | e <- g.entries, shown (hidesQuestion dead) (stateOf e.question.id)]
   , not (null rows)
   ]
   where
     ranks = preferenceAt m.points name
     rulings = effective m.points name
-    row q = BoxRow q [cell o | o <- byPreference ranks q, not (hidesOption dead (Map.lookup o s.verdicts))]
-    cell o = Cell o (titleOf m.space o) (s.verdicts Map.! o) (Map.lookup o ranks) (Map.lookup o rulings)
+    stateOf i st = Map.lookup i st.states
+    verdictOf o st = Map.lookup o st.verdicts
+    shown :: (Maybe a -> Bool) -> (Standing -> Maybe a) -> Bool
+    shown hides at = not (hides (at s) && maybe True (hides . at) before)
+    row q =
+      BoxRow
+        q
+        (changed (stateOf q.id))
+        [cell o | o <- byPreference ranks q, shown (hidesOption dead) (verdictOf o)]
+    cell o =
+      Cell
+        { option = o
+        , title = titleOf m.space o
+        , verdict = s.verdicts Map.! o
+        , was = changed (verdictOf o)
+        , rank = Map.lookup o ranks
+        , ruling = Map.lookup o rulings
+        }
+    changed :: Eq a => (Standing -> Maybe a) -> Maybe a
+    changed at = case before of
+      Just b | at b /= at s -> at b
+      _ -> Nothing
 
 -- | Returns every point, given the stale ones.
 pointViews :: Model -> Set Text -> [PointView]
