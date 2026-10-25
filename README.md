@@ -134,7 +134,7 @@ To take branch, `quandary adopt offline-edit` moves its rulings into `current`, 
 
 ## A space
 
-Directory holding `questions/`, `notes/`, `points/`, optionally `quandary.yaml`. Each question and note = Markdown file with YAML frontmatter, in topic subdirectories any depth. Tool reads `questions/`, `notes/`, `quandary.yaml`, never writes them; writes only `points/`.
+Directory holding `quandary.yaml`, `questions/`, `notes/`, `points/`; `quandary init` creates them. Directory without `quandary.yaml` is not a space. Each question and note = Markdown file with YAML frontmatter, in topic subdirectories any depth. Tool reads `questions/`, `notes/`, `quandary.yaml`, never writes them; writes only `points/`.
 
 ### Ids
 
@@ -220,7 +220,7 @@ Readable means openable without this app, by any text editor.
 
 ### Configuration
 
-`quandary.yaml` configures space:
+`quandary.yaml` configures space; empty or only comments configures nothing:
 
 ```yaml
 grades: [broken, hack, costly, clean]
@@ -310,6 +310,7 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 
 | command | does |
 |---|---|
+| `init` | create what `DIR` lacks of `DIR` itself, `questions/`, `notes/`, `points/`, `quandary.yaml` holding grades as comment, `.quandary/.gitignore` ignoring all of `.quandary/`; print each path created, or `already a space`; overwrite nothing |
 | `check` | report every problem in space and points, every stale point; exit 1 if any, else print `ok` |
 | `status` | frontier in decision order, each question's possible options by preference, with bounds unless spanning every grade; then open questions with option taken; then other open questions no taken option raises, with raisers; then closed, deferred, dormant questions; then every point: fresh or stale, proposed, whether it rules anything beyond point it extends |
 | `show QUESTION` | options with verdicts, rulings, grades, bounds, whether one dominated; under each option, each question it raises, once, with title, and on line below, options raising it alongside: `with a`, `with any of a, (b with c)`; none when option raises it alone |
@@ -333,7 +334,7 @@ Each possible option has bounds `lo..hi`: value with every ungraded option, `<qu
 | `serve [--bind ADDR] [--port N]` | serve point as web pages on `ADDR:N` (default `127.0.0.1:8080`), printing `serving DIR at http://ADDR:N/p/POINT`; follows changes to space's files; `--bind 0.0.0.0` serves the local network, read-only, without login |
 | `graph [--format mermaid\|dot]` | space as Mermaid flowchart (default) or Graphviz digraph, options coloured by verdict; in `dot`, each question a cluster holding its options |
 
-Ruling command names what it did, then prints what moved: one line per question touched, its state change and new verdicts of options it didn't rule, by key (`.other` only when forced, or when question neither changed state nor holds ruled option), and points extending this one that went stale or fresh. Also says when option already forced or impossible, with one responsible set of rulings and how many more `why` lists; still is after `reopen`, with every set; or ranked while impossible. Gives old and new reason when option ruled same way again (no reason clears it), and names raiser an accept commits to that no ruling takes. Refusal names every conflicting set of rulings, and `pick: one` question two of them answer. Commands writing points hold `.quandary/rulings.lock` while they read, check and write, waiting for one another and saying so past a second; OS lock, freed when holder exits however it exits, not reliable over NFS or SMB. Point files replaced whole: reader sees old file or new. Every command but `check`, `browse` and `serve` refuses space with problems, except ruling's out-of-date title; `browse` and `serve` show the problems until fixed. `status`, `show`, `why`, `diff` exit 1 at stale point.
+Ruling command names what it did, then prints what moved: one line per question touched, its state change and new verdicts of options it didn't rule, by key (`.other` only when forced, or when question neither changed state nor holds ruled option), and points extending this one that went stale or fresh. Also says when option already forced or impossible, with one responsible set of rulings and how many more `why` lists; still is after `reopen`, with every set; or ranked while impossible. Gives old and new reason when option ruled same way again (no reason clears it), and names raiser an accept commits to that no ruling takes. Refusal names every conflicting set of rulings, and `pick: one` question two of them answer. Commands writing points hold `.quandary/rulings.lock` while they read, check and write, waiting for one another and saying so past a second; OS lock, freed when holder exits however it exits, not reliable over NFS or SMB. `.quandary/` created by lock gets `.gitignore` ignoring all of it. Point files replaced whole: reader sees old file or new. Every command but `init` refuses directory without `quandary.yaml`. Every command but `check`, `browse` and `serve` refuses space with problems, except ruling's out-of-date title; `browse` and `serve` show the problems until fixed. `status`, `show`, `why`, `diff` exit 1 at stale point.
 
 Question dormant when live in no design reaching point; closed when one option forced (`pick: one`) or none possible (`pick: any`); deferred when point defers it; open otherwise. Frontier = open questions.
 

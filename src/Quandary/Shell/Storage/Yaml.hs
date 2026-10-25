@@ -65,6 +65,7 @@ document es = case dropWhile framing es of
     framing e = case e.yamlEvent of
       Y.EventStreamStart -> True
       Y.EventDocumentStart -> True
+      Y.EventStreamEnd -> True
       _ -> False
 
 -- | Build the node the events open with, returning the events after it.

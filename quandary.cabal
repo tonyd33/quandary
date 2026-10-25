@@ -60,6 +60,7 @@ library
     Quandary.Shell.Command.Diff
     Quandary.Shell.Command.Exhaust
     Quandary.Shell.Command.Graph
+    Quandary.Shell.Command.Init
     Quandary.Shell.Command.Links
     Quandary.Shell.Command.Point
     Quandary.Shell.Command.Prefer

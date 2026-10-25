@@ -6,6 +6,8 @@ module Quandary.Shell.Storage.Files
   , Shape (..)
   , Loaded (..)
   , readSpace
+  , isSpace
+  , createSpace
   , directories
   , usableModel
   , problemsOf
@@ -27,7 +29,7 @@ import Data.Conduit.List qualified as CL
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -43,6 +45,7 @@ import System.Directory
   ( createDirectoryIfMissing
   , doesDirectoryExist
   , doesFileExist
+  , doesPathExist
   , listDirectory
   , removeFile
   , renameFile
@@ -110,6 +113,42 @@ pointsDir = "points"
 -- | The directories under the space's root holding its Markdown files.
 directories :: [FilePath]
 directories = [questionsDir, notesDir, pointsDir]
+
+isSpace :: FilePath -> IO Bool
+isSpace root = doesFileExist (pathOf root ConfigDoc)
+
+-- | Create what the space lacks of its root, its directories, its
+-- `quandary.yaml` and `.quandary/.gitignore`, overwriting nothing.
+-- Returns each path created.
+createSpace :: FilePath -> IO [FilePath]
+createSpace root = do
+  made <- traverse createMissingDirectory (root : map (root </>) directories)
+  config <- createMissingFile (pathOf root ConfigDoc) configTemplate
+  ignore <- createMissingFile (stateIgnore root) ignoreEverything
+  pure (catMaybes (made ++ [config, ignore]))
+
+createMissingDirectory :: FilePath -> IO (Maybe FilePath)
+createMissingDirectory path = createMissing path (createDirectoryIfMissing True path)
+
+createMissingFile :: FilePath -> Text -> IO (Maybe FilePath)
+createMissingFile path content = createMissing path (replaceFile path (encodeUtf8 content))
+
+createMissing :: FilePath -> IO () -> IO (Maybe FilePath)
+createMissing path make = do
+  exists <- doesPathExist path
+  if exists then pure Nothing else Just (normalise path) <$ make
+
+configTemplate :: Text
+configTemplate = "# The grades an option may be assessed at, lowest first.\n# grades: [broken, hack, costly, clean]\n"
+
+stateDir :: FilePath -> FilePath
+stateDir root = root </> ".quandary"
+
+stateIgnore :: FilePath -> FilePath
+stateIgnore root = stateDir root </> ".gitignore"
+
+ignoreEverything :: Text
+ignoreEverything = "*\n"
 
 -- | Read the space's `quandary.yaml` and every Markdown file under its
 -- `questions/`, `notes/` and `points/`. A missing file or directory holds
@@ -407,11 +446,12 @@ replaceFile path content = do
 
 -- | Run the action holding the space's ruling lock, `.quandary/rulings.lock`,
 -- waiting for any other holder and saying so past a second. The lock is
--- free once its holder exits, however it exits.
+-- free once its holder exits, however it exits. A `.quandary/` the lock
+-- creates ignores everything in it.
 withRulingLock :: FilePath -> IO a -> IO a
 withRulingLock root k = do
-  let path = root </> ".quandary" </> "rulings.lock"
-  createDirectoryIfMissing True (takeDirectory path)
+  let path = stateDir root </> "rulings.lock"
+  createStateDir root
   withFile path AppendMode $ \h -> do
     got <- tryFor (20 :: Int) h
     unless got $ do
@@ -424,6 +464,11 @@ withRulingLock root k = do
       hTryLock h ExclusiveLock >>= \case
         True -> pure True
         False -> threadDelay 50000 >> tryFor (n - 1) h
+
+createStateDir :: FilePath -> IO ()
+createStateDir root = do
+  exists <- doesDirectoryExist (stateDir root)
+  unless exists (replaceFile (stateIgnore root) (encodeUtf8 ignoreEverything))
 
 removePoint :: FilePath -> Text -> IO ()
 removePoint root name = removeFile (pathOf root (PointDoc name))

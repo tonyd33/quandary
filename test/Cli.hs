@@ -34,11 +34,53 @@ cli =
         (code, out, _) <- quandary dir ["check"]
         code @?= ExitFailure 1
         lines out @?= [dir </> "points/broken.md: the point is stale"]
-    , testCase "browse and serve refuse a directory that does not exist" $ withCopy $ \dir -> do
+    , testCase "every command but init refuses a directory without quandary.yaml" $ withCopy $ \dir -> do
+        removeFile (dir </> "quandary.yaml")
         let missing = dir </> "missing"
-        results <- mapM (quandary missing) [["browse"], ["serve"]]
+        let commands = [["check"], ["status"], ["browse"], ["serve"]]
+        results <- sequence [quandary d args | d <- [dir, missing], args <- commands]
         [(code, err) | (code, _, err) <- results]
-          @?= replicate 2 (ExitFailure 1, "quandary: " <> missing <> " is not a directory\n")
+          @?= [ (ExitFailure 1, "quandary: not a space: " <> d <> " has no quandary.yaml (quandary init creates one)\n")
+              | d <- [dir, missing]
+              , _ <- commands
+              ]
+    , testCase "init creates a space that checks clean" $ withCopy $ \dir -> do
+        let new = dir </> "new"
+        (code, out, _) <- quandary new ["init"]
+        (code, lines out)
+          @?= ( ExitSuccess
+              , map
+                  (("created " <>) . (new </>))
+                  ["", "questions", "notes", "points", "quandary.yaml", ".quandary/.gitignore"]
+              )
+        ignore <- readFile' (new </> ".quandary/.gitignore")
+        ignore @?= "*\n"
+        r <- quandary new ["check"]
+        r @?= (ExitSuccess, "ok\n", "")
+    , testCase "init creates only what is missing" $ withCopy $ \dir -> do
+        removeFile (dir </> "quandary.yaml")
+        writeFile (dir </> "notes/kept.md") "kept"
+        (code, out, _) <- quandary dir ["init"]
+        (code, lines out)
+          @?= (ExitSuccess, ["created " <> dir </> "quandary.yaml", "created " <> dir </> ".quandary/.gitignore"])
+        kept <- readFile' (dir </> "notes/kept.md")
+        kept @?= "kept"
+    , testCase "init on a whole space overwrites nothing" $ withCopy $ \dir -> do
+        _ <- quandary dir ["init"]
+        writeFile (dir </> "quandary.yaml") "grades: [low, high]\n"
+        r <- quandary dir ["init"]
+        r @?= (ExitSuccess, "already a space\n", "")
+        config <- readFile' (dir </> "quandary.yaml")
+        config @?= "grades: [low, high]\n"
+    , testCase "an empty or comment-only quandary.yaml configures nothing" $ withCopy $ \dir -> do
+        results <-
+          mapM (\config -> writeFile (dir </> "quandary.yaml") config >> quandary dir ["check"]) ["", "\n", "# grades: [a, b]\n"]
+        results @?= replicate 3 (ExitSuccess, "ok\n", "")
+    , testCase "a ruling creating .quandary/ ignores what it holds" $ withCopy $ \dir -> do
+        _ <- quandary dir ["defeat", "conflict/copy", "--", "not now"]
+        files <- listDirectory (dir </> ".quandary")
+        ignore <- readFile' (dir </> ".quandary/.gitignore")
+        (sort files, ignore) @?= ([".gitignore", "rulings.lock"], "*\n")
     , testCase "a command refuses a space with problems" $ withCopy $ \dir -> do
         writeFile (dir </> "questions/bad.md") "no frontmatter\n"
         (code, out, err) <- quandary dir ["status"]

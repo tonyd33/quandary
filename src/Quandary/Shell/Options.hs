@@ -1,6 +1,7 @@
 module Quandary.Shell.Options
   ( Options (..)
   , Command (..)
+  , SpaceCommand (..)
   , Action (..)
   , Format (..)
   , writes
@@ -22,6 +23,10 @@ data Options = Options
   }
 
 data Command
+  = Init
+  | InSpace SpaceCommand
+
+data SpaceCommand
   = Check
   | Browse
   | Serve String Int
@@ -82,9 +87,10 @@ options =
     <$> strOption (short 'C' <> metavar "DIR" <> value "." <> help "The space's directory")
     <*> strOption (long "point" <> metavar "NAME" <> value current <> help "The point to work at")
     <*> hsubparser
-      ( subcommand "check" "Report every problem in the space and its points" (pure Check)
-          <> subcommand "browse" "Browse the space in the terminal, following changes to its files" (pure Browse)
-          <> subcommand "serve" "Serve the space as web pages, following changes to its files" (Serve <$> bind <*> port)
+      ( subcommand "init" "Create a space's directories and quandary.yaml, keeping what exists" (pure Init)
+          <> spaceCommand "check" "Report every problem in the space and its points" (pure Check)
+          <> spaceCommand "browse" "Browse the space in the terminal, following changes to its files" (pure Browse)
+          <> spaceCommand "serve" "Serve the space as web pages, following changes to its files" (Serve <$> bind <*> port)
           <> modelCommand "status" "The frontier, then closed, deferred and dormant questions, then the points" (pure Status)
           <> modelCommand "show" "A question's options, verdicts, rulings and raised questions" (Show <$> positional "QUESTION")
           <> modelCommand "why" "Every set of rulings that makes an option impossible or forced" (Why <$> positional "OPTION")
@@ -163,8 +169,11 @@ pointRm = subcommand "rm" "Remove a point no other point extends" (PointRm <$> p
 subcommand :: String -> String -> Parser a -> Mod CommandFields a
 subcommand name desc p = command name (info p (progDesc desc))
 
+spaceCommand :: String -> String -> Parser SpaceCommand -> Mod CommandFields Command
+spaceCommand name desc p = subcommand name desc (InSpace <$> p)
+
 modelCommand :: String -> String -> Parser Action -> Mod CommandFields Command
-modelCommand name desc p = subcommand name desc (OnModel <$> p)
+modelCommand name desc p = spaceCommand name desc (OnModel <$> p)
 
 positional :: String -> Parser Text
 positional meta = strArgument (metavar meta)

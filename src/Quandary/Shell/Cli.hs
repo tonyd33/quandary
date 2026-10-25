@@ -13,6 +13,7 @@ import Quandary.Shell.Command.Defer qualified as Defer
 import Quandary.Shell.Command.Diff qualified as Diff
 import Quandary.Shell.Command.Exhaust qualified as Exhaust
 import Quandary.Shell.Command.Graph qualified as Graph
+import Quandary.Shell.Command.Init qualified as Init
 import Quandary.Shell.Command.Links qualified as Links
 import Quandary.Shell.Command.Point qualified as Point
 import Quandary.Shell.Command.Prefer qualified as Prefer
@@ -26,11 +27,10 @@ import Quandary.Shell.Command.Whatif qualified as Whatif
 import Quandary.Shell.Command.Why qualified as Why
 import Quandary.Shell.Env (Env (..))
 import Quandary.Shell.Exit (failWith)
-import Quandary.Shell.Options (Action (..), Command (..), Options (..))
+import Quandary.Shell.Options (Action (..), Command (..), Options (..), SpaceCommand (..))
 import Quandary.Shell.Options qualified as Options
 import Quandary.Shell.Render.Text qualified as Render
 import Quandary.Shell.Storage.Files qualified as Files
-import System.Directory (doesDirectoryExist)
 import System.Exit (ExitCode, exitWith)
 import System.IO (stderr)
 
@@ -39,8 +39,17 @@ main = Options.parse >>= run >>= exitWith
 
 run :: Options -> IO ExitCode
 run o = case o.command of
-  Browse -> watched (Browse.run o.dir o.point)
-  Serve address port -> watched (Serve.run o.dir o.point address port)
+  Init -> Init.run o.dir
+  InSpace command -> do
+    space <- Files.isSpace o.dir
+    if space
+      then inSpace o command
+      else failWith ("not a space: " <> Text.pack o.dir <> " has no quandary.yaml (quandary init creates one)")
+
+inSpace :: Options -> SpaceCommand -> IO ExitCode
+inSpace o command = case command of
+  Browse -> Browse.run o.dir o.point
+  Serve address port -> Serve.run o.dir o.point address port
   Check -> do
     (loaded, v) <- validated
     Check.run o.dir (Files.problemsOf o.dir loaded v) v.model
@@ -57,9 +66,6 @@ run o = case o.command of
     validated = do
       loaded <- Files.readSpace o.dir
       pure (loaded, validate loaded.sources)
-    watched frontend = do
-      exists <- doesDirectoryExist o.dir
-      if exists then frontend else failWith (Text.pack o.dir <> " is not a directory")
 
 dispatch :: Env -> Action -> IO ExitCode
 dispatch env Status = Status.run env
