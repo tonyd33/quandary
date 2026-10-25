@@ -31,9 +31,10 @@ data Consequences
 
 data Query v m = Query
   { variables :: Set v
-  , design :: Set (Lit v) -> Set v -> m (Maybe (Set v))
-  -- ^ Returns the given variables a design holding the literals takes, or
-  -- Nothing when none does.
+  , design :: Set (Lit v) -> Set (Lit v) -> Set v -> m (Maybe (Set v))
+  -- ^ Returns the given variables a design holding both sets of literals
+  -- takes, or Nothing when none does. Bind `design held` once for the
+  -- literals every query holds; each application encodes them.
   }
 
 newtype Solver m = Solver
@@ -62,15 +63,17 @@ satSession (Sat withClauses) f k = withClauses (Map.size n.numbers) n.clauses (k
 satQuery :: (Ord v, Applicative m) => Formula v -> Numbered v -> Solve m -> Query v m
 satQuery f n solve = Query {variables = f.variables, design}
   where
-    design s vs = case signed n.numbers s of
+    design held = designWith (signed n.numbers held)
+    designWith Nothing _ _ = pure Nothing
+    designWith (Just hs) extra vs = case signed n.numbers extra of
       Nothing -> pure Nothing
-      Just ls -> fmap (decoded asked) <$> solve ls (IntMap.keys asked)
+      Just ls -> fmap (decoded asked) <$> solve (ls ++ hs) (IntMap.keys asked)
       where
         asked = numbersOf n.numbers vs
 
 -- | Holds when a design holds the literals.
 reaches :: Functor m => Query v m -> Set (Lit v) -> m Bool
-reaches query held = isJust <$> query.design held Set.empty
+reaches query held = isJust <$> query.design held Set.empty Set.empty
 
 -- | Returns the verdict on each variable over the designs holding the
 -- literals, or Stale when none does.
@@ -90,12 +93,13 @@ literalsOver vs = Set.map Take vs <> Set.map Refuse vs
 -- Nothing when none does, querying only a candidate every design found so
 -- far holds.
 backbone :: (Ord v, Monad m) => Query v m -> Set (Lit v) -> Set (Lit v) -> m (Maybe (Set (Lit v)))
-backbone query held candidates = query.design held (variablesOf candidates) >>= traverse (\d -> go Set.empty (Set.filter (holdsIn d) candidates))
+backbone query held candidates = within Set.empty (variablesOf candidates) >>= traverse (\d -> go Set.empty (Set.filter (holdsIn d) candidates))
   where
+    within = query.design held
     go found open = case Set.minView open of
       Nothing -> pure found
       Just (l, rest) ->
-        query.design (Set.insert (opposite l) held) (variablesOf rest) >>= \case
+        within (Set.singleton (opposite l)) (variablesOf rest) >>= \case
           Nothing -> go (Set.insert l found) rest
           Just d -> go found (Set.filter (holdsIn d) rest)
 
@@ -110,10 +114,11 @@ holdsIn d (Refuse v) = Set.notMember v d
 -- alongside the fixed literals, or Nothing when one does.
 core :: (Ord v, Monad m) => Query v m -> Set (Lit v) -> Set (Lit v) -> m (Maybe (Set (Lit v)))
 core query candidates fixed = do
-  reached <- reaches query (Set.union fixed candidates)
-  if reached then pure Nothing else Just <$> minimise blocked candidates
+  reached <- reachesWith candidates
+  if reached then pure Nothing else Just <$> minimise (fmap not . reachesWith) candidates
   where
-    blocked = fmap not . reaches query . Set.union fixed
+    within = query.design fixed
+    reachesWith s = isJust <$> within s Set.empty
 
 -- | Drop each element in order whose removal keeps the predicate true.
 --

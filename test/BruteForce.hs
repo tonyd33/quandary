@@ -17,7 +17,7 @@ bruteForceOn f k = runIdentity (search f k)
 search :: (Ord v, Applicative m) => Formula v -> (Query v m -> m a) -> m a
 search f k = k Query {variables = f.variables, design}
   where
-    design s vs = pure (Set.intersection vs . taken <$> firstDesign f s)
+    design held extra vs = pure (Set.intersection vs . taken <$> firstDesign f (Set.union held extra))
 
 -- | Returns the first design holding the literals, deciding the variables
 -- in order, taken first.

@@ -101,7 +101,8 @@ analyse (Solver solving) m name = solving f $ \query ->
           | closed q = Closed
           | Set.member q.id deferred = Deferred
           | otherwise = Open (openness verdicts q)
-        dead r = not <$> reaches query (Set.union rulings (Set.fromList (map Take (toList r))))
+        dead r = isNothing <$> underRulings (Set.fromList (map Take (toList r))) Set.empty
+        underRulings = query.design rulings
         closed q = case q.pick of
           One -> not (null (taken verdicts q))
           _ -> all (\o -> Map.lookup o verdicts /= Just Possible) (choices q)
@@ -214,9 +215,10 @@ bounds (Solver solving) m name s targets
     -- Start the search at the cap or the lowest seed's grade.
     best query o seeds grade cap = go (minimum (cap : map grade (Set.toList seeds)))
       where
+        seeded = query.design (Set.union chosenRulings (Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds))))
         go 0 = pure 0
         go k = do
-          r <- query.design (Set.unions [chosenRulings, Set.fromList (Take (Chosen o) : map (Take . Seed) (Set.toList seeds)), Set.fromList [Refuse (Committed p) | p <- options, grade p < k]]) Set.empty
+          r <- seeded (Set.fromList [Refuse (Committed p) | p <- options, grade p < k]) Set.empty
           maybe (go (k - 1)) (const (pure k)) r
 
 -- | Returns each option whose upper bound is below a sibling's lower
