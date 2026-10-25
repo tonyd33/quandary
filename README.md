@@ -226,6 +226,7 @@ Readable means openable without this app, by any text editor.
 grades:
   - name: broken
     desc: does not work
+    color: "#c62828"
   - name: hack
     desc: works, but nobody should copy it
   - costly
@@ -234,9 +235,10 @@ grades:
 
 | key | meaning |
 |---|---|
-| `grades` | grades option may be assessed at, lowest first; each a name, or mapping of `name` and `desc` |
+| `grades` | grades option may be assessed at, lowest first; each a name, or mapping of `name`, `desc`, `color` |
 | `name` | grade's name; letters, digits, `-`, `_` |
 | `desc` | grade's description, never blank; `serve` shows it on hover over grade's name |
+| `color` | grade's colour, `"#rgb"` or `"#rrggbb"`, quoted since YAML reads unquoted `#` as comment; `serve` tints grade's name with it, and marks box cell of option assessed at it |
 
 Space chooses grades; tool knows only order. Assessment in space declaring no grades = problem.
 
@@ -386,7 +388,7 @@ Order: question comes after questions of its raisers. Of questions that may come
 | `/p/POINT/q/QUESTION` | question, e.g. `/p/current/q/sync/how` |
 | `/p/POINT/o/OPTION` | option, e.g. `/p/current/o/sync/git`, `/p/current/o/sync/how.other` |
 | `/p/POINT/go?id=TEXT` | 303 to page of id best matching `TEXT`, as `g` in `browse`; not found when none matches |
-| `/p/POINT/box` | box: status groups, each question a row of all its options by preference, coloured by verdict or ruling, with ranks; hovering option marks options it needs, needs one of and excludes, options needing or excluding it, and rows of questions it raises; rest dims |
+| `/p/POINT/box` | box: status groups, each question a row of all its options by preference, coloured by verdict or ruling, with ranks, graded option striped in its grade's `color`; hovering option marks options it needs, needs one of and excludes, options needing or excluding it, and rows of questions it raises; rest dims |
 | `/p/POINT/box?play&accept=O&defeat=O` | box played: suppositions in query order, as `whatif` takes them, nothing recorded until `record`; click option to suppose accepting it, again defeating it, again neither, changed supposition moved to end; options and questions whose verdict or state the last supposition moved outlined with what they were, shown even when dead; each supposition removable, `undo` drops last, `reset` drops all, `whatif` opens them as whatif, `record` opens form recording them; when they reach no design, box draws those before the first that conflicts, and names every minimal set of rulings reaching none |
 | `/p/POINT/record?accept=O&defeat=O` | form recording suppositions as rulings at `POINT`, a reason for each, required for `defeat`; reached from `record` in played box |
 | `POST /p/POINT/rule` | records form's suppositions as `accept` and `defeat` do, holding `.quandary/rulings.lock`; writes nothing when space changed since form was drawn, a `defeat` lacks a reason, or rulings would leave point stale; answers with what moved or why nothing was written |

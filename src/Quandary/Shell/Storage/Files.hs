@@ -145,6 +145,7 @@ configTemplate =
     , "# grades:"
     , "#   - name: broken"
     , "#     desc: does not work"
+    , "#     color: \"#c62828\""
     , "#   - hack"
     , "#   - costly"
     , "#   - clean"
@@ -192,14 +193,15 @@ readConfig root = do
 
 -- | Returns the grade from its name, or from a mapping of its fields.
 gradeSource :: Yaml -> Decode GradeSource
-gradeSource (Scalar l t) = pure GradeSource {at = n.at, name = Just n, desc = Nothing}
+gradeSource (Scalar l t) = pure GradeSource {at = n.at, name = Just n, desc = Nothing, color = Nothing}
   where
     n = located ConfigDoc l t
 gradeSource y = do
-  m <- fields ["name", "desc"] y
+  m <- fields ["name", "desc", "color"] y
   name <- textField ConfigDoc "name" m
   desc <- textField ConfigDoc "desc" m
-  pure GradeSource {at = Loc ConfigDoc (Just (lineOf y)), name, desc}
+  color <- textField ConfigDoc "color" m
+  pure GradeSource {at = Loc ConfigDoc (Just (lineOf y)), name, desc, color}
 
 documents ::
   FilePath -> FilePath -> (Text -> Document) -> (Document -> Yaml -> Body -> Text -> Decode a) -> IO [([FileProblem], a)]

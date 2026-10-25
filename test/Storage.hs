@@ -238,16 +238,27 @@ grades =
           , graded ["  a: {title: A, assessment: {grade: hack, unverified: true, why: slow}}"]
           ]
       ps @?= []
-      [m'.space.grades | Just m' <- [m]] @?= [[Grade "broken" Nothing, Grade "hack" Nothing, Grade "clean" Nothing]]
+      [m'.space.grades | Just m' <- [m]]
+        @?= [[Grade "broken" Nothing Nothing, Grade "hack" Nothing Nothing, Grade "clean" Nothing Nothing]]
       [o.assessment | Just m' <- [m], o <- (m'.space.questions Map.! Id "q").options]
-        @?= [Just Assessment {grade = Grade "hack" Nothing, unverified = True, why = Just "slow"}]
+        @?= [Just Assessment {grade = Grade "hack" Nothing Nothing, unverified = True, why = Just "slow"}]
   , testCase "reads the grades, each a name or a mapping with its desc" $ do
       (ps, m) <-
         loadFiles
           [config ["grades:", "  - name: broken", "    desc: does not work", "  - hack", "  - {name: clean, desc: ' fine '}"]]
       ps @?= []
       [m'.space.grades | Just m' <- [m]]
-        @?= [[Grade "broken" (Just "does not work"), Grade "hack" Nothing, Grade "clean" (Just "fine")]]
+        @?= [[Grade "broken" (Just "does not work") Nothing, Grade "hack" Nothing Nothing, Grade "clean" (Just "fine") Nothing]]
+  , testCase "reads a grade's color" $ do
+      (ps, m) <- loadFiles [config ["grades:", "  - {name: low, color: '#c62828'}", "  - {name: high, color: '#2e7'}"]]
+      ps @?= []
+      [map (.color) m'.space.grades | Just m' <- [m]] @?= [[Just "#c62828", Just "#2e7"]]
+  , testCase "a color that is not hex" $
+      problemsOf [config ["grades:", "  - {name: low, color: red}"]]
+        >>= (@?= [("quandary.yaml", Just 2, Semantic (BadColor "red"))])
+  , testCase "an unquoted hex color reads as empty" $
+      problemsOf [config ["grades:", "  - name: low", "    color: #c62828"]]
+        >>= (@?= [("quandary.yaml", Just 3, Semantic (BadColor ""))])
   , testCase "a blank desc" $
       problemsOf [config ["grades:", "  - {name: low, desc: ' '}"]]
         >>= (@?= [("quandary.yaml", Just 2, Semantic EmptyDesc)])

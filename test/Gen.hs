@@ -42,7 +42,7 @@ genGraded space = do
   qs <- mapM (\q -> (\os -> q {options = os}) <$> mapM assess q.options) space.questions
   pure space {grades, questions = qs}
   where
-    grades = [Grade g Nothing | g <- ["low", "mid", "high"]]
+    grades = [Grade g Nothing Nothing | g <- ["low", "mid", "high"]]
     assess o = do
       a <-
         frequency

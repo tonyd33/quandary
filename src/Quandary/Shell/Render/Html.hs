@@ -14,7 +14,7 @@ import Data.Foldable (toList)
 import Data.List (intersperse)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe, maybeToList)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -325,7 +325,20 @@ chunksHtml p = mapM_ chunk
     chunk (Render.Asked q) = questionLink p q
     chunk (Render.Ranked n) =
       span_ [class_ "rank", style_ ("--rank: " <> Render.tshow (rankValue n))] (toHtml (Render.rankText (Just n)))
-    chunk (Render.Graded g) = maybe (toHtml g.name) (\d -> span_ [class_ "grade", helpOf d] (toHtml g.name)) g.desc
+    chunk (Render.Graded g) = gradeHtml g
+
+-- | Returns the grade's name, tinted with its colour and showing its
+-- description on hover.
+gradeHtml :: Grade -> Html ()
+gradeHtml g = case catMaybes [helpOf <$> g.desc, gradeStyle <$> g.color] of
+  [] -> toHtml g.name
+  attributes -> span_ (class_ ("grade" <> tintedClass g.color) : attributes) (toHtml g.name)
+
+gradeStyle :: Text -> Attributes
+gradeStyle c = style_ ("--grade: " <> c)
+
+tintedClass :: Maybe Text -> Text
+tintedClass = maybe "" (const " tinted")
 
 pointsHtml :: [PointView] -> Html ()
 pointsHtml ps = do
@@ -566,16 +579,24 @@ boxRowHtml context r = div_ [class_ ("box-row" <> movedClass r.was), data_ "key"
 cellHtml :: CellContext -> Cell -> Html ()
 cellHtml context c =
   a_
-    ( [ class_ ("cell badge " <> markClass (Render.mark c.ruling (Just c.verdict)) <> movedClass c.was <> supposedClass)
+    ( [ class_
+          ( "cell badge "
+              <> markClass (Render.mark c.ruling (Just c.verdict))
+              <> movedClass c.was
+              <> supposedClass
+              <> tintedClass color
+          )
       , href_ (context.href c.option)
       , title_
           (optionName c.option <> maybe "" (": " <>) c.title <> maybe "" (\v -> " (was " <> Render.verdictText v <> ")") c.was)
       , data_ "key" (Cytoscape.optionKey c.option)
       ]
+        ++ map gradeStyle (maybeToList color)
         ++ Map.findWithDefault [] c.option context.attrs
     )
     (toHtml (Render.key c.option) >> chunksHtml context.point (Render.rankChunks c.rank))
   where
+    color = c.grade >>= (.color)
     supposedClass
       | Set.member (optionName c.option) context.supposed = " supposed"
       | otherwise = ""

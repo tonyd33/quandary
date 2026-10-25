@@ -186,8 +186,8 @@ pages =
           ]
             @?= [("conflict/copy", Nothing), ("conflict/diff", Just 7), ("conflict/silent", Nothing), ("conflict/shown.other", Nothing)]
         _ -> assertFailure "not a question page"
-  , testCase "a grade's desc shows on hover over its name" $ withCopy $ \dir -> do
-      writeFile (dir </> "quandary.yaml") "grades:\n  - {name: broken, desc: does not work}\n  - clean\n"
+  , testCase "a grade's desc and color show on its name, and its color on graded cells" $ withCopy $ \dir -> do
+      writeFile (dir </> "quandary.yaml") "grades:\n  - {name: broken, desc: does not work, color: '#c62828'}\n  - clean\n"
       createDirectoryIfMissing True (dir </> "questions/extra")
       writeFile (dir </> "questions/extra/pick.md") $
         unlines
@@ -207,7 +207,12 @@ pages =
       let rendered = LazyText.toStrict (renderText (document (QuestionAt "current" (Id "extra/pick")) d))
       assertBool
         (Text.unpack rendered)
-        ("<span class=\"grade\" data-help=\"does not work\">broken</span>" `Text.isInfixOf` rendered)
+        ( "<span class=\"grade tinted\" data-help=\"does not work\" style=\"--grade: #c62828\">broken</span>"
+            `Text.isInfixOf` rendered
+        )
+      box <- withLive dir (`page` BoxAt "current" HideDead Nothing)
+      let boxed = LazyText.toStrict (renderText (document (BoxAt "current" HideDead Nothing) box))
+      assertBool (Text.unpack boxed) ("data-key=\"o:extra/a\" style=\"--grade: #c62828\"" `Text.isInfixOf` boxed)
   , testCase "the rulings page lists accepts then defeats, inherited ones with their point" $
       pageAt (RulingsAt "edit-offline") >>= \case
         RulingsPage _ rs ->

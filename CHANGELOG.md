@@ -10,7 +10,7 @@
 
 ### New Features
 
-- Added a `desc` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name` and `desc`, and `serve` shows a grade's `desc` on hover over its name. A bare name still works.
+- Added a `desc` and a `color` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name`, `desc` and `color`. `serve` shows a grade's `desc` on hover over its name, tints the name with its `color`, and stripes each box cell of an option assessed at it. A bare name still works.
 - Added a rulings page to `serve`, linked from every page: the point's accepted and defeated options, inherited ones included, each with its title, reason and the point it comes from, and a button to try reopening it.
 - Added `init`, which creates a space: its directory, `questions/`, `notes/`, `points/`, a `quandary.yaml` showing grades in a comment, and `.quandary/.gitignore`. It creates only what is missing and overwrites nothing.
 - `graph --format dot` prints the space as a Graphviz digraph, each question a cluster holding its options. `graph` alone still prints Mermaid.

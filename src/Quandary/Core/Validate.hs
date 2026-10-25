@@ -6,7 +6,7 @@ module Quandary.Core.Validate
 where
 
 import Control.Monad (forM, forM_, join, unless, when)
-import Data.Char (isAsciiLower, isDigit)
+import Data.Char (isAsciiLower, isDigit, isHexDigit)
 import Data.List (find, sortOn)
 import Data.List.NonEmpty (nonEmpty)
 import Data.Map.Strict (Map)
@@ -135,13 +135,26 @@ checkGrade g = case g.name of
   Just n -> do
     unless (validSegment n.value) (report n.at (BadGrade n.value))
     desc <- join <$> traverse checkDesc g.desc
-    pure (Just Grade {name = n.value, desc})
+    color <- join <$> traverse checkColor g.color
+    pure (Just Grade {name = n.value, desc, color})
 
 -- | Returns the description, or Nothing after reporting a blank one.
 checkDesc :: Located Text -> Check (Maybe Text)
 checkDesc t
   | Text.null (Text.strip t.value) = Nothing <$ report t.at EmptyDesc
   | otherwise = pure (Just (Text.strip t.value))
+
+-- | Returns the colour, or Nothing after reporting one that is not `#rgb`
+-- or `#rrggbb`.
+checkColor :: Located Text -> Check (Maybe Text)
+checkColor t
+  | isHexColor t.value = pure (Just t.value)
+  | otherwise = Nothing <$ report t.at (BadColor t.value)
+
+isHexColor :: Text -> Bool
+isHexColor t = case Text.uncons t of
+  Just ('#', digits) -> Text.length digits `elem` [3, 6] && Text.all isHexDigit digits
+  _ -> False
 
 checkQuestion :: Names -> QuestionSource -> Check Question
 checkQuestion names q = do
@@ -209,7 +222,7 @@ checkOption names q o = do
 checkAssessment :: Names -> AssessmentSource -> Check Assessment
 checkAssessment names a = do
   grade <- case a.grade of
-    Nothing -> Grade "" Nothing <$ report a.at (Missing GradeField)
+    Nothing -> Grade "" Nothing Nothing <$ report a.at (Missing GradeField)
     Just g -> declaredGrade names g
   unverified <- flag BadUnverified a.unverified
   pure Assessment {grade, unverified, why = (.value) <$> a.why}
@@ -220,8 +233,8 @@ declaredGrade :: Names -> Located Text -> Check Grade
 declaredGrade names g = case find ((== g.value) . (.name)) names.grades of
   Just declared -> pure declared
   Nothing
-    | null names.grades -> Grade g.value Nothing <$ report g.at NoGrades
-    | otherwise -> Grade g.value Nothing <$ report g.at (UnknownGrade g.value)
+    | null names.grades -> Grade g.value Nothing Nothing <$ report g.at NoGrades
+    | otherwise -> Grade g.value Nothing Nothing <$ report g.at (UnknownGrade g.value)
 
 checkForbid :: Names -> ForbidSource -> Check Forbid
 checkForbid names f = do

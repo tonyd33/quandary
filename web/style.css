@@ -24,6 +24,7 @@ a.id.option::before { content: ""; width: 0.6em; height: 0.6em; margin: 0 0.4em 
 .lead { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 0.4rem; }
 .note { font-size: 0.85em; margin-left: 0.3rem; }
 .rank { color: hsl(calc(var(--rank) * 12) 65% var(--rank-lightness)); font-weight: 600; }
+.grade.tinted { padding: 0 0.3em; border-radius: 4px; background: color-mix(in srgb, var(--grade) 18%, transparent); box-shadow: inset 0 -2px 0 var(--grade); }
 ul.entries { list-style: none; padding: 0; margin: 0; }
 ul.entries > li { padding: 0.45rem 0; border-bottom: 1px solid var(--line); }
 .detail { font-size: 0.9rem; margin-top: 0.15rem; color: var(--muted); }
@@ -74,6 +75,7 @@ pre { background: var(--panel); padding: 0.7rem 0.9rem; border-radius: 6px; over
 a.cell { margin: 0; font-family: var(--mono); outline-offset: 1px; transition: opacity 0.1s; }
 a.cell:hover { text-decoration: none; }
 a.cell .rank { margin-left: 0.35em; }
+a.cell.tinted { border-left: 3px solid var(--grade); }
 .legend { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.8rem; margin: 0.4rem 0 0; }
 .legend span { padding: 0 0.45rem; border-radius: 999px; }
 .cell.self, .legend .self { outline: 2px solid var(--fg); }

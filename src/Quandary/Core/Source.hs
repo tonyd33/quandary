@@ -63,6 +63,7 @@ data GradeSource = GradeSource
   { at :: Loc
   , name :: Maybe (Located Text)
   , desc :: Maybe (Located Text)
+  , color :: Maybe (Located Text)
   }
   deriving (Eq, Show)
 
@@ -203,6 +204,7 @@ data Issue
   | BadUnverified Text
   | -- | A grade name that is not letters, digits, `-` and `_`.
     BadGrade Text
+  | BadColor Text
   | DuplicateGrade Text
   | -- | A grade the space does not declare.
     UnknownGrade Text

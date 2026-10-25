@@ -2,6 +2,7 @@
 # grades:
 #   - name: broken
 #     desc: does not work
+#     color: "#c62828"
 #   - hack
 #   - costly
 #   - clean

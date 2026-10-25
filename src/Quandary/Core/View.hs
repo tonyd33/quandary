@@ -338,6 +338,8 @@ data Cell = Cell
   -- ^ Its verdict before, when it differs.
   , rank :: Maybe Rank
   , ruling :: Maybe (Literal, Text, Ruling)
+  , grade :: Maybe Grade
+  -- ^ The grade it is assessed at.
   }
 
 -- | Returns every status group holding a question the view shows, each
@@ -371,6 +373,7 @@ boxGroups m name dead before s =
         , was = changed (verdictOf o)
         , rank = Map.lookup o ranks
         , ruling = Map.lookup o rulings
+        , grade = (.grade) <$> assessmentOf m.space o
         }
     changed :: Eq a => (Standing -> Maybe a) -> Maybe a
     changed at = case before of

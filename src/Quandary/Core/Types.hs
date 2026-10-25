@@ -85,6 +85,8 @@ data Space = Space
 data Grade = Grade
   { name :: Text
   , desc :: Maybe Text
+  , color :: Maybe Text
+  -- ^ A hex colour, `#rgb` or `#rrggbb`.
   }
   deriving (Eq, Show)
 
