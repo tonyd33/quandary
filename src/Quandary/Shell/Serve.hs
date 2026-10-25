@@ -11,7 +11,7 @@ import Data.ByteString.Builder (byteString)
 import Data.ByteString.Char8 qualified as Char8
 import Data.ByteString.Lazy qualified as Lazy
 import Data.Char (isDigit, isHexDigit)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
@@ -22,7 +22,7 @@ import Quandary.Core.Types
 import Quandary.Core.View (Dead (..))
 import Quandary.Shell.Assets qualified as Assets
 import Quandary.Shell.Browse
-import Quandary.Shell.Render.Html (document, graphElements, link, titledDocument)
+import Quandary.Shell.Render.Html (document, graphElements, link, matchesHtml, titledDocument)
 import Quandary.Shell.Resolve (Verb, verbNamed)
 import Quandary.Shell.Storage.Files (Override (..))
 import Text.Read (readMaybe)
@@ -39,12 +39,15 @@ app live point port req respond
   | ["assets", name] <- pathInfo req = respond (maybe (plain status404 "not found\n") served (Assets.asset name))
   | ["p", p, "graph", "elements"] <- pathInfo req =
       page live (GraphAt p (dead (queryString req))) >>= respond . elementsOf
+  | ["p", p, "find"] <- pathInfo req =
+      respond . html status200 . matchesHtml p
+        =<< goToMatches live p (fromMaybe "" (join (lookup "q" (queryString req)) >>= decoded))
   | ["p", p, "go"] <- pathInfo req
   , Just t <- join (lookup "id" (queryString req)) >>= decoded =
       goToRoute live p t >>= respond . either (responseOf (titledDocument p ("go to " <> t <> " at " <> p))) redirect
   | otherwise = case route point (pathInfo req) (queryString req) of
       Nothing -> respond (plain status404 "not found\n")
-      Just r -> page live r >>= respond . responseOf (document r)
+      Just r -> inspectedPage live r >>= respond . responseOf (document r)
 
 -- | Record the suppositions the form posts.
 recordFrom :: Live -> Text -> Request -> IO Response

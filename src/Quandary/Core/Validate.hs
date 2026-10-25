@@ -5,6 +5,7 @@ module Quandary.Core.Validate
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Monad (forM, forM_, join, unless, when)
 import Data.Char (isAsciiLower, isDigit, isHexDigit)
 import Data.List (find, sortOn)
@@ -15,6 +16,7 @@ import Data.Maybe (catMaybes, isJust, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Quandary.Core.GradeRamp (rampColor)
 import Quandary.Core.Rulings (current, effective, emptyPoint)
 import Quandary.Core.Source
 import Quandary.Core.Types
@@ -127,7 +129,13 @@ checkGrades c = case c.grades of
   Just (Located l []) -> [] <$ report l (EmptyList GradesField)
   Just (Located _ gs) -> do
     forM_ (repeats (.value) (mapMaybe (.name) gs)) $ \(_, n) -> report n.at (DuplicateGrade n.value)
-    catMaybes <$> mapM checkGrade gs
+    ramped . catMaybes <$> mapM checkGrade gs
+
+-- | Give each grade declaring no colour the ramp's at its position.
+ramped :: [Grade] -> [Grade]
+ramped gs = zipWith withRamp [0 ..] gs
+  where
+    withRamp i g = Grade {name = g.name, desc = g.desc, color = g.color <|> Just (rampColor (length gs) i)}
 
 checkGrade :: GradeSource -> Check (Maybe Grade)
 checkGrade g = case g.name of

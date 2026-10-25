@@ -22,6 +22,7 @@
 
 ### Improvements
 
+- `serve` has a new layout: a bar with a point menu, the views and a go-to palette opened with Ctrl-K; the point's questions down the left of question and option pages; and a panel on the right showing the selected option's bounds as a bar over the grades and what `next` would grade to move them. The status page shows each group's count and its open questions as cards, each option with its bar. Grades that declare no `color` take a default from orange (lowest) to blue (highest).
 - `check` now lists the keys a mapping accepts beside an unknown key, and for a key left by an unquoted comma inside `{}`, such as `why: cheap, no machinery`, says to quote the value.
 - `show` now takes an option id and prints the option's question, its ruling, every set of rulings making it forced or impossible, its bounds, rank, grade and dominator, its description and the questions it raises. It previously refused with `is an option, not a question`.
 - `show` now prints each question an option raises once, with its title. Options that raise it together with that option go on a `with any of` line under it.

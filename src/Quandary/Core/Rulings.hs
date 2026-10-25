@@ -212,7 +212,8 @@ resolveOption space = \t -> case writtenOption t of
   where
     at = optionAt space
 
--- | Returns the option's assessment. Bind `assessmentOf space` once.
+-- | Returns the option's assessment. Bind `assessmentOf space` once outside
+-- a loop; each application to a space indexes every option.
 assessmentOf :: Space -> OptionId -> Maybe Assessment
 assessmentOf space = assessment
   where
@@ -228,9 +229,12 @@ writtenOption t
   where
     (i, rest) = Text.breakOn "." t
 
--- | Returns a listed option's title; Nothing for an implicit other.
+-- | Returns a listed option's title; Nothing for an implicit other. Bind
+-- `titleOf space` once outside a loop; each application to a space indexes
+-- every option.
 titleOf :: Space -> OptionId -> Maybe Text
-titleOf _ (Other _) = Nothing
-titleOf space (Listed i) = (\(_, o) -> o.title) <$> at i
+titleOf space = title
   where
     at = optionAt space
+    title (Other _) = Nothing
+    title (Listed i) = (\(_, o) -> o.title) <$> at i

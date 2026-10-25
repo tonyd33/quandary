@@ -25,6 +25,8 @@ module Quandary.Core.View
   , optionDescription
   , statusBounds
   , statusGroups
+  , choosing
+  , stillPossible
   , groupKind
   , choicesAt
   , boxGroups
@@ -109,6 +111,17 @@ data PointView = PointView
 -- | Where status lists a question at a fresh point.
 data GroupKind = Frontier | TakenMore | RaisedIfTaken | ClosedGroup | DeferredGroup | DormantGroup
   deriving (Eq, Show)
+
+-- | Holds for a row whose option some design reaching the point takes and
+-- some refuses.
+stillPossible :: OptionRow -> Bool
+stillPossible r = r.verdict == Just Possible
+
+-- | Holds for the groups of questions still choosing among their options.
+choosing :: GroupKind -> Bool
+choosing Frontier = True
+choosing TakenMore = True
+choosing _ = False
 
 data Group = Group
   { kind :: GroupKind

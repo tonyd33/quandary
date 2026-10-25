@@ -56,6 +56,9 @@ module Quandary.Shell.Render.Text
   , rankText
   , rankChunks
   , leads
+  , leadInstruction
+  , leadHeading
+  , boundsChunks
   , raisedTitle
   , coRaiserText
   , staleLines
@@ -321,16 +324,27 @@ leads _ _ [] = "grading moves no root option's bounds\n"
 leads space ranks ls = Text.unlines (intercalate [""] (map lead ls))
   where
     lead l =
-      heading l
-        : ("  " <> plain (instruction l))
+      plain (leadHeading space ranks l)
+        : ("  " <> plain (leadInstruction space l))
         : map ("  " <>) (columns [[optionName o, title o] | o <- Set.toList l.grading])
-    heading l =
-      plain
-        (joined "  " [[Named l.option], wordsOf (title l.option), valueChunks space (Just l.bounds) (Map.lookup l.option ranks)])
-    instruction l = case l.move of
-      Raise g -> [Words "grade each ", gradeAt space g] ++ orBetter g ++ [Words " to raise lo:"]
-      Lower g -> [Words "grade each below ", gradeAt space g, Words " to lower hi:"]
     title = fromMaybe "" . titleOf space
+
+-- | Returns the lead's option with its title, bounds and rank.
+leadHeading :: Space -> Map OptionId Rank -> Lead -> [Chunk]
+leadHeading space ranks l =
+  joined
+    "  "
+    [ [Named l.option]
+    , wordsOf (fromMaybe "" (titleOf space l.option))
+    , valueChunks space (Just l.bounds) (Map.lookup l.option ranks)
+    ]
+
+-- | Returns which grades the lead's options take to move its bound.
+leadInstruction :: Space -> Lead -> [Chunk]
+leadInstruction space l = case l.move of
+  Raise g -> [Words "grade each ", gradeAt space g] ++ orBetter g ++ [Words " to raise lo:"]
+  Lower g -> [Words "grade each below ", gradeAt space g, Words " to lower hi:"]
+  where
     orBetter g
       | g == topGrade space = []
       | otherwise = [Words " or better"]

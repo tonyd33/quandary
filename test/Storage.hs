@@ -241,16 +241,22 @@ grades =
           ]
       ps @?= []
       [m'.space.grades | Just m' <- [m]]
-        @?= [[Grade "broken" Nothing Nothing, Grade "hack" Nothing Nothing, Grade "clean" Nothing Nothing]]
+        @?= [ [Grade "broken" Nothing (Just "#b3401a"), Grade "hack" Nothing (Just "#8b7a6b"), Grade "clean" Nothing (Just "#1d4e9e")]
+            ]
       [o.assessment | Just m' <- [m], o <- (m'.space.questions Map.! Id "q").options]
-        @?= [Just Assessment {grade = Grade "hack" Nothing Nothing, unverified = True, why = Just "slow"}]
+        @?= [Just Assessment {grade = Grade "hack" Nothing (Just "#8b7a6b"), unverified = True, why = Just "slow"}]
   , testCase "reads the grades, each a name or a mapping with its desc" $ do
       (ps, m) <-
         loadFiles
           [config ["grades:", "  - name: broken", "    desc: does not work", "  - hack", "  - {name: clean, desc: ' fine '}"]]
       ps @?= []
       [m'.space.grades | Just m' <- [m]]
-        @?= [[Grade "broken" (Just "does not work") Nothing, Grade "hack" Nothing Nothing, Grade "clean" (Just "fine") Nothing]]
+        @?= [
+              [ Grade "broken" (Just "does not work") (Just "#b3401a")
+              , Grade "hack" Nothing (Just "#8b7a6b")
+              , Grade "clean" (Just "fine") (Just "#1d4e9e")
+              ]
+            ]
   , testCase "reads a grade's color" $ do
       (ps, m) <- loadFiles [config ["grades:", "  - {name: low, color: '#c62828'}", "  - {name: high, color: '#2e7'}"]]
       ps @?= []

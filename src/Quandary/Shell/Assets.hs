@@ -23,6 +23,7 @@ asset "graph.js" = Just (js, $(embedFile "web/graph.js"))
 asset "box.js" = Just (js, $(embedFile "web/box.js"))
 asset "graph-style.js" = Just (js, $(embedFile "web/graph-style.js"))
 asset "explain.js" = Just (js, $(embedFile "web/explain.js"))
+asset "shell.js" = Just (js, $(embedFile "web/shell.js"))
 asset "cytoscape.min.js" = Just (js, $(embedFile "web/vendor/cytoscape/cytoscape.min.js"))
 asset "cytoscape-dagre.min.js" = Just (js, $(embedFile "web/vendor/cytoscape-dagre/cytoscape-dagre.min.js"))
 asset "cytoscape-expand-collapse.js" =
@@ -44,6 +45,7 @@ version = Text.pack (showHex (ByteString.foldl' step 0xcbf29ce484222325 everythi
       , "box.js"
       , "graph-style.js"
       , "explain.js"
+      , "shell.js"
       , "cytoscape.min.js"
       , "cytoscape-dagre.min.js"
       , "cytoscape-expand-collapse.js"

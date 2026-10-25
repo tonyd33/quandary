@@ -19,6 +19,7 @@ module Quandary.Shell.Browse
   , withLive
   , currentRevision
   , page
+  , inspectedPage
   , awaitChange
   , nextPane
   , pageStanding
@@ -29,6 +30,8 @@ module Quandary.Shell.Browse
   , Target (..)
   , targetRoute
   , goToRoute
+  , goToMatches
+  , Match (..)
   , record
   , found
   , clampIndex
@@ -51,7 +54,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -59,6 +62,8 @@ import Data.Time (UTCTime)
 import Data.Void (Void, absurd)
 import Quandary.Core.Analyse
 import Quandary.Core.Analyse qualified as Analyse
+import Quandary.Core.Next (Lead)
+import Quandary.Core.Next qualified as Next
 import Quandary.Core.Rulings (Edit (..), EditError, PointEdit (..))
 import Quandary.Core.Rulings qualified as Rulings
 import Quandary.Core.Source (Document (..))
@@ -180,6 +185,9 @@ data Drawn = Drawn
   { revision :: Revision
   , editLock :: LockState
   -- ^ The space's edit lock as the page was drawn.
+  , leads :: Map OptionId Lead
+  -- ^ What `next` would grade for each option the page inspects; empty
+  -- unless the page was drawn with them.
   , shown :: Shown
   }
 
@@ -198,10 +206,11 @@ data Memo = Memo
   , played :: Map (Text, [(Verb, Text)]) Analysis
   -- ^ The analysis at each point under each list of suppositions played.
   , staleNames :: Maybe (Set Text)
+  , inspected :: Map Route (Map OptionId Lead)
   }
 
 emptyMemo :: Memo
-emptyMemo = Memo Map.empty Map.empty Map.empty Nothing
+emptyMemo = Memo Map.empty Map.empty Map.empty Nothing Map.empty
 
 -- | Run the continuation on the space, reread whenever its files change.
 withLive :: FilePath -> (Live -> IO a) -> IO a
@@ -293,13 +302,48 @@ page :: Live -> Route -> IO Drawn
 page live r = do
   (rev, u) <- readTVarIO live.loaded
   lock <- Files.editLock live.dir
-  Drawn rev lock <$> case u of
+  Drawn rev lock Map.empty <$> case u of
     Unusable ps -> pure (Problems ps)
     Usable m -> Shown m <$> memoised live rev (Map.lookup r . (.pages)) store (build (Building live rev m) r)
   where
     store pg memo
       | memoisable r pg = memo {pages = Map.insert r pg memo.pages}
       | otherwise = memo
+
+-- | Returns the route's page at the current revision with what `next`
+-- would grade for each option it inspects.
+inspectedPage :: Live -> Route -> IO Drawn
+inspectedPage live r = do
+  d <- page live r
+  case d.shown of
+    Shown m pg -> do
+      ls <-
+        memoised
+          live
+          d.revision
+          (Map.lookup r . (.inspected))
+          (\l memo -> memo {inspected = Map.insert r l memo.inspected})
+          (pageLeads m pg)
+      pure d {leads = ls}
+    Problems _ -> pure d
+
+-- | Returns what `next` would grade for the first root option on the
+-- status page, each possible option on a question page, and the option on
+-- its page.
+pageLeads :: Model -> Page -> IO (Map OptionId Lead)
+pageLeads m (StatusPage p a _ _) = maybe (pure Map.empty) (\s -> byOption <$> Next.leads cadical m p s 1) (standing a)
+pageLeads m (QuestionPage v) = leadsAt m v.point v.analysis (possibleBounds v.rows)
+pageLeads m (OptionPage v) = leadsAt m v.point v.analysis (possibleBounds [v.row])
+pageLeads _ _ = pure Map.empty
+
+leadsAt :: Model -> Text -> Analysis -> [(OptionId, Bounds)] -> IO (Map OptionId Lead)
+leadsAt m p a bs = maybe (pure Map.empty) (\s -> byOption <$> Next.leadsOf cadical m p s bs) (standing a)
+
+possibleBounds :: [OptionRow] -> [(OptionId, Bounds)]
+possibleBounds = mapMaybe (\r -> (,) r.option <$> r.bounds) . filter stillPossible
+
+byOption :: [Lead] -> Map OptionId Lead
+byOption ls = Map.fromList [(l.option, l) | l <- ls]
 
 memoisable :: Route -> Page -> Bool
 memoisable _ (NotFound _) = False
@@ -547,7 +591,7 @@ record live p drawnAt override rs = Files.withRulingLock live.dir $ do
   (now, u) <- readTVarIO live.loaded
   disk <- usability live.dir <$> Files.readSpace live.dir
   lock <- Files.editLock live.dir
-  Drawn now lock <$> case u of
+  Drawn now lock Map.empty <$> case u of
     Unusable ps -> pure (Problems ps)
     Usable m
       | not (hasPoint m p) -> pure (Shown m (NotFound ("unknown point " <> p)))
@@ -592,11 +636,37 @@ goToRoute live p t = do
   (rev, u) <- readTVarIO live.loaded
   lock <- Files.editLock live.dir
   pure $ case u of
-    Unusable ps -> Left (Drawn rev lock (Problems ps))
+    Unusable ps -> Left (Drawn rev lock Map.empty (Problems ps))
     Usable m
-      | not (hasPoint m p) -> Left (Drawn rev lock (Shown m (NotFound ("unknown point " <> p))))
+      | not (hasPoint m p) -> Left (Drawn rev lock Map.empty (Shown m (NotFound ("unknown point " <> p))))
       | (_, target) : _ <- matching ById m p t -> Right (targetRoute p target)
-      | otherwise -> Left (Drawn rev lock (Shown m (NotFound ("no id matches " <> t))))
+      | otherwise -> Left (Drawn rev lock Map.empty (Shown m (NotFound ("no id matches " <> t))))
+
+-- | An id the go-to palette lists.
+data Match = Match
+  { target :: Target
+  , title :: Text
+  }
+  deriving (Eq, Show)
+
+-- | Returns the twelve ids at the point the text matches best, each with
+-- its target and title; none when the space has problems.
+goToMatches :: Live -> Text -> Text -> IO [Match]
+goToMatches live p t = do
+  (_, u) <- readTVarIO live.loaded
+  pure $ case u of
+    Usable m | hasPoint m p -> map (matchIn m.space) (take 12 (map snd (matching ById m p t)))
+    _ -> []
+
+-- | Returns the match for the target in the space. Bind `matchIn space`
+-- once outside a loop.
+matchIn :: Space -> Target -> Match
+matchIn space = match
+  where
+    optionTitle = Rulings.titleOf space
+    match target = Match {target, title = title target}
+    title (ToQuestion q) = (space.questions Map.! q).title
+    title (ToOption o) = fromMaybe "" (optionTitle o)
 
 -- | Returns the index clamped to the list's indices, 0 when it is empty.
 clampIndex :: [a] -> Int -> Int

@@ -38,6 +38,7 @@ import Network.Wai
 import Network.Wai.Internal (ResponseReceived (..))
 import Quandary.Core.Analyse (Analysis (..), Cause (..))
 import Quandary.Core.Compile (Constraint (..))
+import Quandary.Core.GradeRamp (rampColor)
 import Quandary.Core.Rulings (EditError (..))
 import Quandary.Core.Types
 import Quandary.Core.View
@@ -220,9 +221,18 @@ pages =
         ( "<span class=\"grade tinted\" data-help=\"does not work\" style=\"--grade: #c62828\">broken</span>"
             `Text.isInfixOf` rendered
         )
+      assertBool (Text.unpack rendered) ("style=\"--grade: #1d4e9e\"" `Text.isInfixOf` rendered)
       box <- withLive dir (`page` BoxAt "current" HideDead Nothing)
       let boxed = LazyText.toStrict (renderText (document (BoxAt "current" HideDead Nothing) box))
       assertBool (Text.unpack boxed) ("data-key=\"o:extra/a\" style=\"--grade: #c62828\"" `Text.isInfixOf` boxed)
+  , testCase "grades without a colour take the ramp's, orange lowest to blue highest" $
+      map (rampColor 4) [0 .. 3] ++ [rampColor 1 0] @?= ["#b3401a", "#c77a12", "#4f7bc4", "#1d4e9e", "#1d4e9e"]
+  , testCase "the inspector says what to grade next for each possible option" $ withCopy $ \dir -> do
+      writeFile (dir </> "quandary.yaml") "grades: [low, high]\n"
+      d <- withLive dir (`inspectedPage` QuestionAt "current" (Id "sync/how"))
+      let rendered = LazyText.toStrict (renderText (document (QuestionAt "current" (Id "sync/how")) d))
+      assertBool (Text.unpack rendered) ("data-option=\"sync/git\"" `Text.isInfixOf` rendered)
+      assertBool (Text.unpack rendered) ("grade each below " `Text.isInfixOf` rendered)
   , testCase "the graph page updates in place when the space changes, other pages reload" $ do
       graph <- htmlAt (GraphAt "current" HideDead)
       status <- htmlAt (StatusAt "current")
@@ -510,6 +520,9 @@ goTo =
   [ testCase "pseqrp finds pattern/sequence/run-parsers first" $
       map fst (ranked "pseqrp" (map (\t -> (t, ())) ids))
         @?= ["pattern/sequence/run-parsers", "pattern/sequence/run-views/prefix-view", "pattern/sequence/run-views/names/prelude"]
+  , testCase "the palette's matches carry each id's title" $ do
+      found <- withLive fixture (\live -> goToMatches live "current" "sygit")
+      take 1 found @?= [Match {target = ToOption (listed "sync/git"), title = "Git repo under the hood"}]
   , testCase "a query out of order matches nothing" $ score "srp" "pattern/sequence" @?= Nothing
   , testCase "case is ignored" $ assertBool "no match" (isJust (score "SH" "sync/how"))
   , testCase "a match at a segment start beats one inside a word" $

@@ -1,8 +1,9 @@
--- | Which options to grade to move the bounds of root options.
+-- | Which options to grade to move an option's bounds.
 module Quandary.Core.Next
   ( Lead (..)
   , Move (..)
   , leads
+  , leadsOf
   )
 where
 
@@ -21,7 +22,7 @@ import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 
--- | The fewest options whose grades move a root option's bounds.
+-- | The fewest options whose grades move an option's bounds.
 data Lead = Lead
   { option :: OptionId
   , bounds :: Bounds
@@ -52,9 +53,21 @@ data Session m = Session
 -- the cheaper of raising `lo` and lowering `hi`, raising when they cost
 -- the same.
 leads :: Monad m => Solver m -> Model -> Text -> Standing -> Int -> m [Lead]
-leads Solver {solving} m name s n
-  | null m.space.grades = pure []
-  | otherwise = solving formula (\query -> firstLeads (session query) n (rootOptions m name s))
+leads solver m name s n = inSession solver m name s (\se -> firstLeads se n (rootOptions m name s))
+
+-- | Returns the lead of each option whose bounds grading can move, from the
+-- bounds given.
+leadsOf :: Monad m => Solver m -> Model -> Text -> Standing -> [(OptionId, Bounds)] -> m [Lead]
+leadsOf solver m name s obs = case filter (\(_, b) -> b.lo < b.hi) obs of
+  [] -> pure []
+  open -> inSession solver m name s (\se -> catMaybes <$> mapM (uncurry (leadFor se)) open)
+
+-- | Run the continuation in one session at the point, or return nothing
+-- when the space declares no grades.
+inSession :: (Monad m, Monoid a) => Solver m -> Model -> Text -> Standing -> (Session m -> m a) -> m a
+inSession Solver {solving} m name s k
+  | null m.space.grades = pure mempty
+  | otherwise = solving formula (k . session)
   where
     (formula, each) = Analyse.bounding m name s
     session query =

@@ -4,6 +4,7 @@ module Quandary.Shell.Render.Html
   , link
   , graphElements
   , markdown
+  , matchesHtml
   )
 where
 
@@ -12,7 +13,7 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString.Builder (Builder, toLazyByteString)
 import Data.ByteString.Lazy qualified as Lazy
 import Data.Foldable (toList)
-import Data.List (intersperse)
+import Data.List (find, intersperse)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe, maybeToList)
@@ -22,10 +23,13 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding (decodeUtf8)
 import Lucid
+import Lucid.Base (makeAttributes)
 import Network.HTTP.Types.URI (encodePathSegments, renderQueryText)
 import Quandary.Core.Analyse
 import Quandary.Core.Compile qualified as Compile
+import Quandary.Core.Next (Lead (..))
 import Quandary.Core.Rulings (EditError, PointEdit (..))
+import Quandary.Core.Rulings qualified as Rulings
 import Quandary.Core.Types
 import Quandary.Core.Validate (Model (..))
 import Quandary.Core.View
@@ -91,26 +95,191 @@ titledDocument point title d = doctypehtml_ $ do
     title_ (toHtml ("quandary: " <> title))
     link_ [rel_ "stylesheet", href_ (Assets.assetPath "style.css")]
   body_ $ do
-    nav_ $ do
-      a_ [href_ (link (StatusAt point))] (toHtml ("point " <> point))
-      " "
-      a_ [href_ (link (BoxAt point HideDead Nothing))] "box"
-      " "
-      a_ [href_ (link (GraphAt point HideDead))] "graph"
-      " "
-      a_ [href_ (link (RulingsAt point))] "rulings"
-      " "
-      a_ [href_ (link (SearchAt point ""))] "search"
-      " "
-      a_ [href_ (link Points)] "points"
-      " "
-      form_ [method_ "get", action_ (path ["p", point, "go"])] $
-        input_ [type_ "search", name_ "id", placeholder_ "go to id"]
+    topBar point d
     forM_ (Render.lockNotice d.editLock) (p_ [class_ "banner"] . toHtml)
-    main_ (pageHtml d)
+    div_ [class_ "frame"] $ do
+      questionsPane point d
+      main_ (pageHtml d)
+      inspector d
+    palette point
+    scripts ["shell.js"]
     unless (answersPost d) $
       script_
         ("new EventSource(\"/events?since=" <> revisionText d.revision <> "\").onmessage = () => " <> changeScript d <> ";")
+
+-- | Returns the bar on every page: the point with the others to switch to,
+-- the views, and the box opening the go-to palette.
+topBar :: Text -> Drawn -> Html ()
+topBar point d = header_ [class_ "top"] $ do
+  a_ [class_ "brand", href_ (link (StatusAt point))] "quandary"
+  details_ [class_ "points"] $ do
+    summary_ (toHtml ("point " <> point))
+    ul_ (forM_ (pointNames d) (\n -> li_ (a_ [href_ (link (StatusAt n))] (toHtml n))))
+  nav_ (forM_ [StatusView, BoxView, GraphView, RulingsView, PointsView] (viewLink point (viewOf d)))
+  a_ [class_ "find", href_ (link (SearchAt point "")), data_ "find" (path ["p", point, "find"])] $ do
+    span_ "Go to id or search"
+    kbd_ "Ctrl K"
+
+data View = StatusView | BoxView | GraphView | RulingsView | PointsView
+  deriving (Eq)
+
+viewName :: View -> Text
+viewName StatusView = "status"
+viewName BoxView = "box"
+viewName GraphView = "graph"
+viewName RulingsView = "rulings"
+viewName PointsView = "points"
+
+viewRoute :: Text -> View -> Route
+viewRoute point StatusView = StatusAt point
+viewRoute point BoxView = BoxAt point HideDead Nothing
+viewRoute point GraphView = GraphAt point HideDead
+viewRoute point RulingsView = RulingsAt point
+viewRoute _ PointsView = Points
+
+-- | Returns the view the page shows, if any.
+viewOf :: Drawn -> Maybe View
+viewOf d = case d.shown of
+  Shown _ StatusPage {} -> Just StatusView
+  Shown _ BoxPage {} -> Just BoxView
+  Shown _ GraphPage {} -> Just GraphView
+  Shown _ RulingsPage {} -> Just RulingsView
+  Shown _ PointsPage {} -> Just PointsView
+  _ -> Nothing
+
+viewLink :: Text -> Maybe View -> View -> Html ()
+viewLink point shown v = a_ ([href_ (link (viewRoute point v))] ++ [class_ "on" | shown == Just v]) (toHtml (viewName v))
+
+-- | Returns the point's questions grouped as status groups them, the shown
+-- question marked, beside a question or option page.
+questionsPane :: Text -> Drawn -> Html ()
+questionsPane point d = forM_ ((,) <$> shownQuestion d <*> pageStanding d) $ \(q, (m, s)) ->
+  aside_ [class_ "questions", ariaLabel "Questions"] $
+    forM_ (statusGroups m point Map.empty s) (paneGroup point q)
+
+paneGroup :: Text -> Id -> Group -> Html ()
+paneGroup point shown g = unless (null ids) $
+  details_ ([class_ "group"] ++ [opened | choosing g.kind || shown `elem` ids]) $ do
+    summary_ (span_ (toHtml (Render.groupTitle g.kind)) >> span_ [class_ "tally"] (toHtml (Render.tshow (length ids))))
+    ul_ (forM_ ids (\q -> li_ ([class_ "here" | q == shown]) (questionLink point q)))
+  where
+    ids = [e.question.id | e <- g.entries]
+
+-- | Returns the panel beside the page: what to grade next on the status
+-- page, the selected option on a question page, what to grade next for
+-- the option on its page.
+inspector :: Drawn -> Html ()
+inspector d = case d.shown of
+  Shown m (StatusPage p _ _ _) -> forM_ d.leads $ \l ->
+    panel (leadHtml m p (Just (Render.leadHeading m.space (Rulings.preferenceAt m.points p) l)) l)
+  Shown m (QuestionPage v) -> panel (optionPanels m v d.leads)
+  Shown m (OptionPage v) -> forM_ d.leads (panel . leadHtml m v.point Nothing)
+  _ -> pure ()
+  where
+    panel = aside_ [class_ "inspector", ariaLabel "Inspector"]
+
+-- | Returns a panel for each possible option, all but the selected hidden.
+optionPanels :: Model -> QuestionView -> Map OptionId Lead -> Html ()
+optionPanels m v ls = case filter stillPossible v.rows of
+  [] -> p_ [class_ "muted"] "No option is still possible."
+  rows -> forM_ rows $ \r ->
+    section_ ([class_ "inspect", data_ "option" (optionName r.option)] ++ [hidden_ "" | Just r.option /= selectedIn v]) $
+      optionPanel m v.point r (Map.lookup r.option ls)
+
+-- | Returns the option the question page selects first: its first possible
+-- one.
+selectedIn :: QuestionView -> Maybe OptionId
+selectedIn v = (.option) <$> find stillPossible v.rows
+
+-- | Returns the option's facts for the inspector: its id and title, verdict
+-- and rank, value, what to grade next, grade, the whatif buttons and a link
+-- to its page.
+optionPanel :: Model -> Text -> OptionRow -> Maybe Lead -> Html ()
+optionPanel m p r lead = do
+  p_ [class_ "eyebrow"] "option"
+  optionLink p r.option
+  h2_ (toHtml (fromMaybe "" r.title))
+  p_ [class_ "badges"] $ do
+    markBadge r
+    chunksHtml p (Render.rankChunks r.rank)
+  forM_ r.bounds (valueHtml m.space)
+  forM_ lead (leadHtml m p Nothing)
+  notesPanel m.space p r
+  div_ [class_ "actions"] $ do
+    whatifButtons p r
+    a_ [href_ (link (OptionAt p (optionName r.option)))] "open option page"
+
+notesPanel :: Space -> Text -> OptionRow -> Html ()
+notesPanel space p r = case Render.rowNotes space r of
+  [] -> pure ()
+  notes -> p_ [class_ "detail"] (notesHtml p notes)
+
+-- | Returns the bounds as a bar over the grades, each grade named below it.
+valueHtml :: Space -> Bounds -> Html ()
+valueHtml space b = div_ [class_ "value"] $ do
+  p_ [class_ "eyebrow"] (span_ [helpOf Render.boundsHelp] "value")
+  boundsBar space b
+  div_ [class_ "scale"] (forM_ space.grades (span_ . gradeHtml))
+
+-- | Returns the bounds as a bar, then as grades.
+valueCell :: Space -> Text -> Bounds -> Html ()
+valueCell space p b = do
+  boundsBar space b
+  span_ [class_ "detail"] (chunksHtml p (Render.boundsChunks space b))
+
+-- | Returns the bounds as a cell per grade: those at the bounds solid,
+-- those between them faint, the rest empty.
+boundsBar :: Space -> Bounds -> Html ()
+boundsBar space b =
+  span_ [class_ "bar", role_ "img", ariaLabel described, title_ described] $
+    forM_ (zip [0 ..] space.grades) $ \(i, g) ->
+      span_ (class_ (cellClass i) : map gradeStyle (maybeToList g.color)) ""
+  where
+    described = Render.plain (Render.boundsChunks space b)
+    cellClass i
+      | i < b.lo || i > b.hi = "out"
+      | i == b.lo || i == b.hi = "end"
+      | otherwise = "in"
+
+-- | Returns the fewest options to grade to move the lead's bound, under the
+-- heading when given.
+leadHtml :: Model -> Text -> Maybe [Render.Chunk] -> Lead -> Html ()
+leadHtml m p heading l = div_ [class_ "lead-box"] $ do
+  p_ [class_ "eyebrow"] "grade next"
+  forM_ heading (p_ . chunksHtml p)
+  p_ (chunksHtml p (Render.leadInstruction m.space l))
+  ul_ [class_ "grading"] $ forM_ l.grading $ \o ->
+    li_ (optionLink p o >> div_ [class_ "detail"] (toHtml (fromMaybe "" (title o))))
+  where
+    title = Rulings.titleOf m.space
+
+markBadge :: OptionRow -> Html ()
+markBadge r = span_ [class_ ("badge " <> markClass mark), helpOf (Render.markHelp mark)] (toHtml (Render.rowMark r))
+  where
+    mark = Render.mark r.ruling r.verdict
+
+-- | Returns the go-to palette, opened from the top bar or with Ctrl K.
+palette :: Text -> Html ()
+palette point = term "dialog" [id_ "palette", ariaLabel "Go to"] $ do
+  form_ [method_ "get", action_ (path ["p", point, "go"])] $
+    input_ [type_ "search", name_ "id", placeholder_ "Go to id", autocomplete_ "off", ariaLabel "Go to id"]
+  ul_ [id_ "palette-results"] ""
+  p_ [class_ "keys"] $ do
+    "Enter opens, arrows move, Esc closes. "
+    a_ [id_ "palette-search", href_ (link (SearchAt point ""))] "Search text and reasons"
+
+-- | Returns the palette's matches, each id linked to its page and followed
+-- by its title.
+matchesHtml :: Text -> [Match] -> Html ()
+matchesHtml p ms = forM_ ms $ \mt -> li_ $ do
+  targetLink p mt.target
+  span_ [class_ "detail"] (toHtml mt.title)
+
+ariaLabel :: Text -> Attributes
+ariaLabel = makeAttributes "aria-label"
+
+opened :: Attributes
+opened = makeAttributes "open" ""
 
 -- | Returns the script run when the space changes: the graph updates in
 -- place, every other page reloads.
@@ -155,15 +324,47 @@ statusHtml m p a bs ss = do
   h1_ (toHtml ("point " <> p))
   case a of
     StaleAt cores -> pre_ (toHtml (Text.unlines (Render.staleLines m p cores)))
-    Fresh s -> forM_ (statusGroups m p bs s) $ \g -> unless (null g.entries) $ do
-      h2_ (toHtml (Render.groupTitle g.kind) >> helpIcon (Render.groupHelp g.kind))
-      ul_ [class_ "entries"] $ forM_ g.entries $ \e -> li_ $ do
-        questionLink p e.question.id
-        span_ [class_ "title"] (toHtml e.question.title)
-        detailHtml m.space p e.detail
+    Fresh s -> do
+      let groups = filter (not . null . (.entries)) (statusGroups m p bs s)
+      countsHtml groups
+      forM_ groups $ \g -> do
+        h2_ (toHtml (Render.groupTitle g.kind) >> helpIcon (Render.groupHelp g.kind))
+        groupHtml m.space p g
   p_
     [class_ "muted"]
     (toHtml (Render.tshow (Set.size ss) <> " stale of " <> Render.tshow (Map.size m.points) <> " points"))
+
+-- | Returns how many questions each group holds.
+countsHtml :: [Group] -> Html ()
+countsHtml groups = div_ [class_ "counts"] $ forM_ groups $ \g ->
+  div_ [class_ "count"] (strong_ (toHtml (Render.tshow (length g.entries))) >> span_ (toHtml (Render.groupTitle g.kind)))
+
+-- | Returns a status group: the questions still choosing as cards of their
+-- options' bounds and ranks, the rest as lines.
+groupHtml :: Space -> Text -> Group -> Html ()
+groupHtml space p g
+  | choosing g.kind = div_ [class_ "cards"] (mapM_ (questionCard space p) g.entries)
+  | otherwise = ul_ [class_ "entries"] (mapM_ (entryHtml space p) g.entries)
+
+entryHtml :: Space -> Text -> Entry -> Html ()
+entryHtml space p e = li_ $ do
+  questionLink p e.question.id
+  span_ [class_ "title"] (toHtml e.question.title)
+  detailHtml space p e.detail
+
+questionCard :: Space -> Text -> Entry -> Html ()
+questionCard space p e = div_ [class_ "card"] $ do
+  questionLink p e.question.id
+  p_ [class_ "card-title"] (toHtml e.question.title)
+  case e.detail of
+    Choosing cs -> do
+      ul_ [class_ "card-options"] $ forM_ cs.possible $ \c -> li_ $ do
+        keyLink p c.option
+        forM_ c.bounds (boundsBar space)
+        chunksHtml p (Render.rankChunks c.rank)
+      unless (null cs.taken) $
+        p_ [class_ "detail"] (span_ [class_ "lead", helpOf Render.takenHelp] "taken" >> mapM_ (keyLink p) cs.taken)
+    other -> detailHtml space p other
 
 -- | Returns what status shows beside a question, each option linked.
 detailHtml :: Space -> Text -> Detail -> Html ()
@@ -189,23 +390,47 @@ questionHtml space v = do
     graphLink v.point (deadness v.analysis v.question.id Nothing) (Cytoscape.questionKey v.question.id)
     chunksHtml v.point (Render.questionShape v.question)
   markdown v.question.description
-  table_ [class_ "options"] $ forM_ v.rows $ \r -> do
-    let mark = Render.mark r.ruling r.verdict
-        notes = Render.rowNotes space r
-    tr_ [id_ (anchor r.option)] $ do
-      td_
-        [class_ "mark"]
-        (span_ [class_ ("badge " <> markClass mark), helpOf (Render.markHelp mark)] (toHtml (Render.rowMark r)))
-      td_ (optionLink v.point r.option)
-      td_ (chunksHtml v.point (Render.rowDetail space v.point r))
-      td_ (whatifButtons v.point r)
-    unless (null notes) $
-      tr_ (td_ "" >> td_ [colspan_ "3", class_ "detail"] (notesHtml v.point notes))
-    forM_ r.objections $ \ob ->
-      tr_ (td_ "" >> td_ [colspan_ "3"] (objectionHtml v.point ob))
+  table_ [class_ "options"] $ do
+    thead_ (tr_ (mapM_ th_ ["verdict", "key", "option", "value", "rank", ""]))
+    forM_ v.rows $ \r -> do
+      optionRow space v.point (selectedIn v) r
+      raisesRow v.point r
   forM_ v.question.options $ \o -> section_ [id_ ("body-" <> idText o.id)] $ do
     h2_ (optionLink v.point (Listed o.id) >> span_ [class_ "title"] (toHtml o.title))
     markdown o.description
+
+-- | Returns the option's row: verdict, key, title and ruling, value, rank
+-- and whatif buttons; a possible option's row selects its panel.
+optionRow :: Space -> Text -> Maybe OptionId -> OptionRow -> Html ()
+optionRow space p selected r =
+  tr_
+    ([id_ (anchor r.option), class_ rowClass, data_ "option" (optionName r.option)] ++ [tabindex_ "0" | stillPossible r])
+    $ do
+      td_ [class_ "mark"] (markBadge r)
+      td_ (keyLink p r.option)
+      td_ $ do
+        span_ [class_ "option-title"] (toHtml (fromMaybe "" r.title))
+        forM_ r.ruling (span_ [class_ "detail"] . toHtml . Render.rulingNote p)
+      td_ [class_ "value"] (forM_ r.bounds (valueCell space p))
+      td_ [class_ "rank-cell"] (chunksHtml p (Render.rankChunks r.rank))
+      td_ (whatifButtons p r)
+  where
+    rowClass
+      | Just r.option == selected = "row selected"
+      | otherwise = "row"
+
+-- | Returns the questions the option raises, folded under their count.
+raisesRow :: Text -> OptionRow -> Html ()
+raisesRow p r = unless (null r.objections) $
+  tr_ [class_ "raised-row"] $ do
+    td_ ""
+    td_ [colspan_ "5"] $ details_ [class_ "raises-all"] $ do
+      summary_ (toHtml (raisesCount (length r.objections)))
+      mapM_ (objectionHtml p) r.objections
+
+raisesCount :: Int -> Text
+raisesCount 1 = "raises 1 question"
+raisesCount n = "raises " <> Render.tshow n <> " questions"
 
 optionHtml :: Model -> OptionView -> Html ()
 optionHtml m v = do
@@ -216,15 +441,17 @@ optionHtml m v = do
     questionLink v.point v.question.id
     span_ [class_ "title"] (toHtml (v.question.title <> Render.stateSuffix v.analysis v.question))
   forM_ v.row.ruling $ \ruling -> p_ (toHtml (Render.rulingSummary v.point ruling))
+  div_ [class_ "facts"] $ do
+    div_ [class_ "fact"] (p_ [class_ "eyebrow"] "verdict" >> markBadge v.row)
+    forM_ v.row.bounds $ \b -> div_ [class_ "fact"] (valueHtml m.space b)
+    div_ [class_ "fact"] $ do
+      p_ [class_ "eyebrow"] "rank and grade"
+      chunksHtml v.point (Render.rankChunks v.row.rank)
+      notesPanel m.space v.point v.row
+  div_ [class_ "actions"] (whatifButtons v.point v.row)
   causesHtml m v
-  unless (null value) $ p_ (chunksHtml v.point value)
-  unless (null notes) $ p_ [class_ "detail"] (notesHtml v.point notes)
-  div_ (whatifButtons v.point v.row)
   markdown (optionDescription v)
   forM_ v.row.objections (div_ [class_ "raises"] . objectionHtml v.point)
-  where
-    value = Render.valueChunks m.space v.row.bounds v.row.rank
-    notes = Render.rowNotes m.space v.row
 
 notesHtml :: Text -> [[Render.Chunk]] -> Html ()
 notesHtml p = sequence_ . intersperse (br_ []) . map (chunksHtml p)

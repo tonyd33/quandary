@@ -28,7 +28,7 @@ import Quandary.Core.Analyse
   , whatif
   )
 import Quandary.Core.Compile (compile, constraints)
-import Quandary.Core.Next (Lead (..), Move (..), leads)
+import Quandary.Core.Next (Lead (..), Move (..), leads, leadsOf)
 import Quandary.Core.Solver
 import Quandary.Core.Types
 import Quandary.Core.View (OptionView (..), QuestionView (..), optionView, questionView, statusBounds)
@@ -176,6 +176,20 @@ properties =
                     pure $
                       map (\l -> (l.option, l.move, Set.size l.grading)) found === fewestGrades space p (rootsOf space s)
                         .&&. conjoin (map (leadMoves space p) found)
+    , testProperty "an option page's lead is the fewest grades moving its bounds" $
+        forAll (genSpace >>= genGraded) $ \space ->
+          forAll (genPoint space) $ \p ->
+            consistent p ==>
+              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
+                analyse solver (modelAt space p) "current" >>= \case
+                  StaleAt _ -> pure discard
+                  Fresh s -> do
+                    let possible = [o | q <- Map.elems space.questions, o@(Listed _) <- choices q, Map.lookup o s.verdicts == Just Possible]
+                    bs <- bounds solver (modelAt space p) "current" s possible
+                    found <- leadsOf solver (modelAt space p) "current" s (Map.toList bs)
+                    pure $
+                      sortOn (\(o, _, _) -> o) [(l.option, l.move, Set.size l.grading) | l <- found]
+                        === sortOn (\(o, _, _) -> o) (fewestGrades space p possible)
     , testProperty "option views agree under brute force and CaDiCaL" $
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
