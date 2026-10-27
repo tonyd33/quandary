@@ -1,0 +1,9 @@
+{
+  "name": "quandary",
+  "description": "The design-space skill: explore and decide a design space kept in a quandary directory.",
+  "author": {
+    "name": "Tony Du"
+  },
+  "repository": "https://github.com/tonyd33/quandary",
+  "license": "MIT"
+}

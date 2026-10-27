@@ -10,6 +10,7 @@
 
 ### New Features
 
+- Added the design-space agent skill in `skills/design-space`, which teaches an agent to explore a space with quandary. Claude Code installs it as a plugin with `/plugin marketplace add tonyd33/quandary`; Codex, opencode and other agents reading Agent Skills install it with `npx skills add tonyd33/quandary` or by copying the directory.
 - Added `next [N]`. For each of the first `N` most preferred root options whose bounds can still move, it names the fewest ungraded options to grade: those that, graded above the option's lower bound, raise it, or those that, graded below its upper bound, lower it, whichever is fewer.
 - Added `lock REASON` and `unlock`, marking a space mid-edit. While the lock is live, every command writing points refuses with its reason and age unless given `--force`, read-only commands warn, and `browse` and `serve` show it above every page; `serve`'s record form refuses unless its override is checked. `unlock` runs `check` before releasing, and lists every ruling forced over the lock. The lock lapses 15 minutes after the later of its taking and the last edit to the space's questions, notes or `quandary.yaml`; until someone unlocks, commands and pages warn that the edit may be unfinished.
 - Added a `desc` and a `color` for each grade: an entry of `grades` in `quandary.yaml` can be a mapping of `name`, `desc` and `color`. `serve` shows a grade's `desc` on hover over its name, tints the name with its `color`, and stripes each box cell of an option assessed at it. A bare name still works.

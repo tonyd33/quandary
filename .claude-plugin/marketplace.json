@@ -1,0 +1,13 @@
+{
+  "name": "quandary",
+  "owner": {
+    "name": "Tony Du"
+  },
+  "plugins": [
+    {
+      "name": "quandary",
+      "source": "./",
+      "description": "The design-space skill: explore and decide a design space kept in a quandary directory."
+    }
+  ]
+}

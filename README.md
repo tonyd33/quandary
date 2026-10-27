@@ -19,6 +19,14 @@ With cabal (GHC 9.10), CaDiCaL SAT solver library where `pkg-config` finds it:
 cabal install
 ```
 
+### Agent skill
+
+`skills/design-space/SKILL.md` teaches coding agent to run design space with quandary. Follows [Agent Skills](https://agentskills.io) format, so any agent reading `SKILL.md` can load it.
+
+- Claude Code: `/plugin marketplace add tonyd33/quandary`, then `/plugin install quandary@quandary`.
+- Any agent, with [`skills`](https://github.com/vercel-labs/skills): `npx skills add tonyd33/quandary`.
+- By hand: copy `skills/design-space` into agent's skills directory: `~/.claude/skills/` (Claude Code), `~/.codex/skills/` (Codex), `~/.config/opencode/skills/` (opencode), or `.agents/skills/` in project.
+
 ## A walkthrough
 
 `test/fixtures/notes-sync` = small space: notes app syncing between devices. Copy, look around:
