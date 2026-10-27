@@ -17,6 +17,7 @@ in
   packages = [
     pkgs.pkg-config
     pkgs.fourmolu
+    inputs.tix.packages.${pkgs.stdenv.system}.default
   ]
   ++ deps.libraryPkgconfigDepends;
 
