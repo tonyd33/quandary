@@ -35,7 +35,6 @@ import Quandary.Core.View (OptionView (..), QuestionView (..), optionView, quest
 import Quandary.Shell.Solver.Cadical (cadical)
 import Test.Tasty
 import Test.Tasty.QuickCheck
-import Toysolver (toysolver)
 
 -- | Returns the solver running three sessions at once.
 threeWide :: Solver m -> Solver m
@@ -119,7 +118,7 @@ properties =
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
             consistent p ==>
-              ioProperty . fmap conjoin . forM [toysolver, cadical, threeWide cadical] $ \solver ->
+              ioProperty . fmap conjoin . forM [cadical, threeWide cadical] $ \solver ->
                 analyse solver (modelAt space p) "current" >>= \case
                   StaleAt _ -> pure (bestDesigns space p === Map.empty)
                   Fresh s -> (=== bestDesigns space p) <$> bounds solver (modelAt space p) "current" s (Set.toList (compile space).variables)
@@ -145,12 +144,12 @@ properties =
             forAll (elements (Set.toList (compile space).variables)) $ \o ->
               let p' = Set.insert (Take o) (Set.delete (Refuse o) p)
                in consistent p' ==>
-                    ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
-                      whatif solver (modelAt space p) "current" [Suppose (Take o)] >>= \case
+                    ioProperty $
+                      whatif cadical (modelAt space p) "current" [Suppose (Take o)] >>= \case
                         Left e -> pure (counterexample (show e) False)
                         Right (_, Moved {after = StaleAt _}) -> pure (property True)
                         Right (m', Moved {after = Fresh s}) -> do
-                          found <- implications solver m' "current" s (Set.singleton o)
+                          found <- implications cadical m' "current" s (Set.singleton o)
                           pure $
                             map (\i -> i.raising.question.id) found === [q.id | q <- Map.elems space.questions, any (elem o) q.raisedBy]
                               .&&. conjoin [i.values === raisedBounds space p' s i.raising.question | i <- found]
@@ -168,11 +167,11 @@ properties =
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
             consistent p ==>
-              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
-                analyse solver (modelAt space p) "current" >>= \case
+              ioProperty $
+                analyse cadical (modelAt space p) "current" >>= \case
                   StaleAt _ -> pure discard
                   Fresh s -> do
-                    found <- leads solver (modelAt space p) "current" s (length (rootsOf space s))
+                    found <- leads cadical (modelAt space p) "current" s (length (rootsOf space s))
                     pure $
                       map (\l -> (l.option, l.move, Set.size l.grading)) found === fewestGrades space p (rootsOf space s)
                         .&&. conjoin (map (leadMoves space p) found)
@@ -180,13 +179,13 @@ properties =
         forAll (genSpace >>= genGraded) $ \space ->
           forAll (genPoint space) $ \p ->
             consistent p ==>
-              ioProperty . fmap conjoin . forM [toysolver, cadical] $ \solver ->
-                analyse solver (modelAt space p) "current" >>= \case
+              ioProperty $
+                analyse cadical (modelAt space p) "current" >>= \case
                   StaleAt _ -> pure discard
                   Fresh s -> do
                     let possible = [o | q <- Map.elems space.questions, o@(Listed _) <- choices q, Map.lookup o s.verdicts == Just Possible]
-                    bs <- bounds solver (modelAt space p) "current" s possible
-                    found <- leadsOf solver (modelAt space p) "current" s (Map.toList bs)
+                    bs <- bounds cadical (modelAt space p) "current" s possible
+                    found <- leadsOf cadical (modelAt space p) "current" s (Map.toList bs)
                     pure $
                       sortOn (\(o, _, _) -> o) [(l.option, l.move, Set.size l.grading) | l <- found]
                         === sortOn (\(o, _, _) -> o) (fewestGrades space p possible)

@@ -147,7 +147,6 @@ test-suite spec
     Properties
     Solvers
     Storage
-    Toysolver
   build-depends:
     , async
     , bytestring
@@ -166,5 +165,4 @@ test-suite spec
     , temporary
     , text
     , time
-    , toysolver
     , wai

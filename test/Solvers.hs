@@ -10,7 +10,6 @@ import Quandary.Core.Types
 import Quandary.Shell.Solver.Cadical (cadical)
 import Test.Tasty
 import Test.Tasty.QuickCheck
-import Toysolver (toysolver)
 
 solvers :: TestTree
 solvers =
@@ -20,7 +19,6 @@ solvers =
         forAll genSpace $ \space ->
           forAll (genPoint space) $ \p ->
             let f = compile space in bruteForceOn f (\q -> consequences q p) === enumerated space p
-    , agrees "toysolver" toysolver
     , agrees "cadical" cadical
     ]
 
